@@ -104,12 +104,13 @@ def runtime_support(runtime):
     evidence['deviceTypeMetadataStatus']='DECLARED_IPHONE14'if types is not None else'NOT_ADVERTISED_BOOT_COMPATIBILITY_PENDING'
     return evidence
 
-def runtime_list(phase):return call(phase,['/usr/bin/xcrun','simctl','list','runtimes','--json'],60)
+def runtime_list(phase):return call(phase,['/usr/bin/xcrun','simctl','list','runtimes','--json'],90 if phase=='runtimes-before'else 60)
 def devices(phase,cleanup=False):return call(phase,['/usr/bin/xcrun','simctl','list','devices','--json'],20,cleanup)
 
 def qualify():
     global NAME,BASELINE_IDS,OWNED_UUID
     runtime=exact_runtime(runtime_list('runtimes-before'))
+    require_help(call('simctl-help',['/usr/bin/xcrun','simctl','help'],20),['list','create','boot','bootstatus','shutdown','delete','io'])
     if runtime is None:
         export=(OUT/'export').resolve();export.mkdir(exist_ok=False);R['ownedExportCreated']=True;save()
         call('official-exact-download',CLIENT.fixed_command(export),720,scan=True,export=export)
@@ -202,7 +203,6 @@ def main():
         if version.strip()!='Xcode 16.4\nBuild version 16F6':raise Refused('EXACT_EXISTING_XCODE164_REQUIRED')
         CLIENT.require_help(call('xcode-help',['/usr/bin/xcodebuild','-help'],20))
         call('firstlaunch-status',['/usr/bin/xcodebuild','-checkFirstLaunchStatus'],20)
-        require_help(call('simctl-help',['/usr/bin/xcrun','simctl','help'],20),['list','create','boot','bootstatus','shutdown','delete','io'])
         qualify();R['status']='EXACT_RUNTIME_OWN_DEVICE_BOOT_QUALIFIED_PENDING_CLEANUP';save()
     except Exception as error:
         R['status']='REFUSED_OR_INCOMPLETE';R['refusalCode']=str(error)if isinstance(error,Refused)else type(error).__name__;save()
