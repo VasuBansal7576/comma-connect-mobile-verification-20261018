@@ -46,7 +46,6 @@ jobs:
         id: install
         timeout-minutes: 12
         run: |
-          python3 scripts/bounded_official_v16.py open-lab-url "$SIMULATOR_UDID"
           python3 scripts/bounded_official_v16.py install "$SIMULATOR_UDID"
       - name: Actual natural EOF continuation (transport classified from source)
         if: always() && steps.install.outcome == 'success'
