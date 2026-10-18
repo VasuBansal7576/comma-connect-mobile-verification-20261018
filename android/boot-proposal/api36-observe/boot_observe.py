@@ -1317,6 +1317,22 @@ def firstscreen_can_launch_chrome(packages):
     launcher={'com.google.android.apps.nexuslauncher','com.android.launcher3','com.google.android.googlequicksearchbox'}
     return bool(packages.intersection(launcher)) and packages.issubset(launcher|{'com.android.systemui','android'})
 
+def observed_chrome_version(lines,present):
+    # dumpsys may repeat consistent version metadata; preserve every original row.
+    if type(present) is not bool or type(lines) is not list or any(type(line) is not str for line in lines):raise Refused('ACTUAL_CHROME_VERSION_UNVERIFIED')
+    if not present:
+        if lines:raise Refused('ACTUAL_CHROME_VERSION_UNVERIFIED')
+        return None
+    names=[];codes=[]
+    for line in lines:
+        name=re.fullmatch(r'versionName=([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)',line)
+        code=re.fullmatch(r'versionCode=([1-9][0-9]*) minSdk=([1-9][0-9]*) targetSdk=([1-9][0-9]*)',line)
+        if name:names.append(name.group(1))
+        elif code:codes.append(code.group(1))
+        else:raise Refused('ACTUAL_CHROME_VERSION_UNVERIFIED')
+    if len(set(names))!=1 or len(set(codes))!=1:raise Refused('ACTUAL_CHROME_VERSION_UNVERIFIED')
+    return {'schema':'consistent-adb-chrome-package-version-v1','versionName':names[0],'versionCodeDecimal':codes[0],'versionNameRowCount':len(names),'versionCodeRowCount':len(codes),'loadedBrowserRuntimeProved':False}
+
 def main():
     global STATE,TRACE,CAP
     OUT.mkdir(parents=True,exist_ok=True)
@@ -1400,7 +1416,8 @@ def main():
         version,_,cut=run([ADB,'-s',SERIAL,'shell','dumpsys','package','com.android.chrome'],'chrome_version',limit=2*1024*1024,retain_stdout=False)
         lines=[line.strip() for line in version.decode(errors='replace').splitlines() if re.match(r'\s*version(?:Name|Code)=',line)]
         (OUT/'chrome_version.log').write_text('\n'.join(lines)+'\n');STATE['androidChromeVersionLines']=lines
-        if cut or (present and len([line for line in lines if line.startswith('versionName=')])!=1):raise Refused('ACTUAL_CHROME_VERSION_UNVERIFIED')
+        if cut:raise Refused('ACTUAL_CHROME_VERSION_UNVERIFIED')
+        STATE['api36ChromeVersionObservation']=observed_chrome_version(lines,present)
         api,_,cut=run([ADB,'-s',SERIAL,'shell','getprop','ro.build.version.sdk'],'actual_api_level',limit=128)
         if cut or api.strip()!=b'36':raise Refused('ACTUAL_API36_REQUIRED')
         if STATE.get('UIInputCommands')!=0:raise Refused('OBSERVATION_HAS_UNEXPECTED_UI_INPUT')
