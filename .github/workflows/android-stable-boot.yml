@@ -19,6 +19,10 @@ on:
         type: boolean
         default: false
         description: Open only the observed native Chrome menu on the owned V15 page; capture and stop before install
+      observe_owned_v15_add_home_dialog:
+        type: boolean
+        default: false
+        description: Tap the reviewed Add Home menu row and capture the resulting dialog; stop before confirmation
 permissions:
   contents: read
 jobs:
@@ -52,12 +56,19 @@ jobs:
           CHROME_TERMS_APPROVED: ${{ inputs.approve_chrome_124_terms_without_account }}
           OWNED_LAB_CONTINUATION: ${{ inputs.continue_to_owned_v15_lab }}
           OBSERVE_OWNED_MENU: ${{ inputs.observe_owned_v15_chrome_menu }}
+          OBSERVE_ADD_HOME: ${{ inputs.observe_owned_v15_add_home_dialog }}
         run: |
+          if [ "$OBSERVE_ADD_HOME" = true ] && { [ "$OBSERVE_OWNED_MENU" != true ] || [ "$OWNED_LAB_CONTINUATION" != true ] || [ "$CHROME_TERMS_APPROVED" != true ]; }; then
+            echo 'Add Home observation requires all prior reviewed continuation inputs.'
+            exit 2
+          fi
           if [ "$OBSERVE_OWNED_MENU" = true ] && [ "$OWNED_LAB_CONTINUATION" != true ]; then
             echo 'Menu observation requires the explicit owned lab continuation.'
             exit 2
           fi
-          if [ "$CHROME_TERMS_APPROVED" = true ] && [ "$OWNED_LAB_CONTINUATION" = true ] && [ "$OBSERVE_OWNED_MENU" = true ]; then
+          if [ "$OBSERVE_ADD_HOME" = true ]; then
+            python3 android/boot-proposal/boot.py --approve-chrome-124-terms-without-account --continue-owned-v15-lab-after-privacy-notice --observe-owned-v15-chrome-menu --observe-owned-v15-add-home-dialog
+          elif [ "$CHROME_TERMS_APPROVED" = true ] && [ "$OWNED_LAB_CONTINUATION" = true ] && [ "$OBSERVE_OWNED_MENU" = true ]; then
             python3 android/boot-proposal/boot.py --approve-chrome-124-terms-without-account --continue-owned-v15-lab-after-privacy-notice --observe-owned-v15-chrome-menu
           elif [ "$CHROME_TERMS_APPROVED" = true ] && [ "$OWNED_LAB_CONTINUATION" = true ]; then
             python3 android/boot-proposal/boot.py --approve-chrome-124-terms-without-account --continue-owned-v15-lab-after-privacy-notice

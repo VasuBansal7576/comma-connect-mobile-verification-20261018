@@ -23,7 +23,7 @@ static FILE *pcm,*events; static uint64_t frames,sequence,event_sequence,holes;
 static int failed,ready,stopping,data_ready,index_basis_set; static int64_t index_basis; static double began,ready_at,stop_at;
 static uint32_t source_output_index=PA_INVALID_INDEX,monitor_index=PA_INVALID_INDEX; static unsigned duration;
 static double mono(void){struct timespec t;if(clock_gettime(CLOCK_MONOTONIC,&t))_exit(125);return(double)t.tv_sec+t.tv_nsec/1e9;}
-static void watchdog(int sig){(void)sig;static const char msg[]="OWN_PULSE_CAPTURE_HARD_DEADLINE\n";write(STDERR_FILENO,msg,sizeof(msg)-1);_exit(124);}
+static void watchdog(int sig){(void)sig;static const char msg[]="OWN_PULSE_CAPTURE_HARD_DEADLINE\n";ssize_t written=write(STDERR_FILENO,msg,sizeof(msg)-1);(void)written;_exit(124);}
 static void event(const char *kind,int value){
     if(!events)return;
     if(fprintf(events,"{\"eventSequence\":%"PRIu64",\"kind\":\"%s\",\"hostMonotonicSeconds\":%.9f,\"fileFrameOffset\":%"PRIu64",\"value\":%d}\n",event_sequence++,kind,mono(),frames,value)<0)failed=1;

@@ -291,7 +291,7 @@ def chrome_terms_target(xml,png,version_lines):
 
 def maybe_approved_chrome_terms_action(version_lines,argv):
     if CHROME_TERMS_APPROVAL_FLAG not in argv:return False
-    if argv not in [[CHROME_TERMS_APPROVAL_FLAG],[CHROME_TERMS_APPROVAL_FLAG,OWNED_LAB_CONTINUATION_FLAG],[CHROME_TERMS_APPROVAL_FLAG,OWNED_LAB_CONTINUATION_FLAG,OWNED_MENU_OBSERVATION_FLAG]]:raise Refused('EXACT_REVIEWED_CONTINUATION_FLAGS_REQUIRED')
+    if argv not in [[CHROME_TERMS_APPROVAL_FLAG],[CHROME_TERMS_APPROVAL_FLAG,OWNED_LAB_CONTINUATION_FLAG],[CHROME_TERMS_APPROVAL_FLAG,OWNED_LAB_CONTINUATION_FLAG,OWNED_MENU_OBSERVATION_FLAG],[CHROME_TERMS_APPROVAL_FLAG,OWNED_LAB_CONTINUATION_FLAG,OWNED_MENU_OBSERVATION_FLAG,OWNED_ADD_HOME_FLAG]]:raise Refused('EXACT_REVIEWED_CONTINUATION_FLAGS_REQUIRED')
     fresh=fresh_input_snapshot('chrome-before-approved-terms-action');capture_start=fresh['captureStartMonotonic']
     xml=(OUT/(fresh['label']+'.xml')).read_bytes();png=(OUT/(fresh['label']+'.png')).read_bytes()
     target=chrome_terms_target(xml,png,version_lines)
@@ -303,7 +303,8 @@ def maybe_approved_chrome_terms_action(version_lines,argv):
     STATE['termsAcceptedByScript']=None;STATE['termsAcceptanceActionDispatched']=True;STATE['termsAcceptanceOutcome']='UNVERIFIED_PENDING_POST_SCREEN_REVIEW';save()
     observe_post_terms_readiness()
     if OWNED_LAB_CONTINUATION_FLAG in argv:
-        if OWNED_MENU_OBSERVATION_FLAG in argv:continue_owned_lab_after_reviewed_privacy_notice(version_lines,observe_menu=True)
+        if OWNED_ADD_HOME_FLAG in argv:continue_owned_lab_after_reviewed_privacy_notice(version_lines,observe_menu=True,add_home=True)
+        elif OWNED_MENU_OBSERVATION_FLAG in argv:continue_owned_lab_after_reviewed_privacy_notice(version_lines,observe_menu=True)
         else:continue_owned_lab_after_reviewed_privacy_notice(version_lines)
     else:STATE['status']='STOP_AFTER_APPROVED_CHROME_TERMS_ACTION_REQUIRES_REVIEW'
     return True
@@ -402,8 +403,9 @@ def observe_owned_lab_native_ui():
         row['scope']='Native UI observation only; URL/page readiness, helper pins and installed status require separate review.';save()
     STATE['ownedLabNativeObservationOutcome']='STOP_NATIVE_LAB_OBSERVATIONS_REQUIRE_REVIEW_NO_INSTALL_OR_AUDIO_VERDICT'
 
-def continue_owned_lab_after_reviewed_privacy_notice(version_lines,observe_menu=False):
+def continue_owned_lab_after_reviewed_privacy_notice(version_lines,observe_menu=False,add_home=False):
     # Optional owned-test continuation only; no Settings/dropdown/account/legal action.
+    if add_home and not observe_menu:raise Refused('ADD_HOME_REQUIRES_CURRENT_MENU_ACTION')
     view_command=owned_lab_view_command()
     fresh=fresh_input_snapshot('chrome-before-reviewed-privacy-ack');capture_start=fresh['captureStartMonotonic']
     xml=(OUT/(fresh['label']+'.xml')).read_bytes();png=(OUT/(fresh['label']+'.png')).read_bytes()
@@ -415,7 +417,8 @@ def continue_owned_lab_after_reviewed_privacy_notice(version_lines,observe_menu=
     STATE['privacyNoticeAcknowledgement']['tapCommandCompleted']=True;STATE['ownedLabNavigation']={'action':'android.intent.action.VIEW','package':'com.android.chrome','url':OWNED_LAB_URL,'attempts':1};save()
     run([ADB,'-s',SERIAL,'shell',view_command],'navigate_owned_v15_with_action_view',timeout=15)
     STATE['ownedLabNavigation']['commandCompleted']=True;observe_owned_lab_native_ui()
-    if observe_menu:open_owned_chrome_menu_and_observe(version_lines)
+    if add_home:open_owned_chrome_menu_and_observe(version_lines,add_home=True)
+    elif observe_menu:open_owned_chrome_menu_and_observe(version_lines)
     else:STATE['status']='STOP_AFTER_OWNED_LAB_NATIVE_OBSERVATIONS_REQUIRES_REVIEW'
 
 OWNED_MENU_OBSERVATION_FLAG='--observe-owned-v15-chrome-menu'
@@ -455,7 +458,7 @@ def owned_chrome_menu_target(xml,png,version_lines):
     if web_rect[0]<=x<web_rect[2] and web_rect[1]<=y<web_rect[3]:raise Refused('CHROME_MENU_OVERLAPS_WEB_CONTENT')
     return {'x':x,'y':y,'bounds':r,'screen':[width,height],'resourceId':prefix+'menu_button','contentDescription':menu.get('content-desc'),'observedAddress':address.get('text'),'badge':'V15 aca842c376c4','webViewClass':webview.get('class'),'scope':'Native context only; badge is not a full byte-pin or installed-PWA proof.'}
 
-def open_owned_chrome_menu_and_observe(version_lines):
+def open_owned_chrome_menu_and_observe(version_lines,add_home=False):
     fresh=fresh_input_snapshot('owned-v15-before-native-chrome-menu');capture_start=fresh['captureStartMonotonic']
     xml=(OUT/(fresh['label']+'.xml')).read_bytes();png=(OUT/(fresh['label']+'.png')).read_bytes()
     target=owned_chrome_menu_target(xml,png,version_lines);age=time.monotonic()-capture_start
@@ -463,6 +466,7 @@ def open_owned_chrome_menu_and_observe(version_lines):
     STATE['ownedChromeMenuInput']={'inputSnapshotLabel':fresh['label'],'explicitObservationFlag':True,'attempts':1,'target':target,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'snapshotAgeUpperBoundSeconds':age,'installOrAddHomeActions':0}
     STATE['UIInputCommands']=STATE.get('UIInputCommands',0)+1;save()
     run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_owned_native_chrome_menu',timeout=5)
+    menu_action=STATE['ownedChromeMenuInput'];menu_action['tapCommandCompleted']=True;menu_action['tapCompletionBootSeconds']=time.monotonic()-START;save()
     start=time.monotonic();deadline=min(start+70,START+CAP);rows=[];STATE['ownedChromeMenuObservations']=rows
     transient={'UI_DUMP_REPORTED_ERROR','UI_DUMP_SUCCESS_MARKER_REQUIRED','UI_XML_INVALID','OWN_COMMAND_FAILED_ui_dump','OWN_COMMAND_FAILED_ui_xml','OWN_COMMAND_TIMEOUT_ui_dump','OWN_COMMAND_TIMEOUT_ui_xml','OWN_COMMAND_TIMEOUT_screen_png','CHROME_SCREEN_OBSERVATION_DEADLINE'}
     for attempt in range(1,4):
@@ -475,8 +479,77 @@ def open_owned_chrome_menu_and_observe(version_lines):
             if str(error) not in transient:raise
             row['status']='FRESH_XML_UNAVAILABLE';row['code']=str(error);save();continue
         row['xmlFreshnessVerified']=True;row['xmlSHA256']=hashlib.sha256((OUT/(label+'.xml')).read_bytes()).hexdigest();row['pngSHA256']=hashlib.sha256((OUT/(label+'.png')).read_bytes()).hexdigest();save()
+        if add_home:break  # Separate fresh-input capture still guards the row; default keeps all3frames.
+    if add_home:
+        tap_owned_add_home_and_observe(version_lines,menu_action);return
     STATE['ownedChromeMenuOutcome']='OBSERVATIONS_REQUIRE_REVIEW_NO_POPUP_ROW_OR_INSTALL_VERDICT'
     STATE['status']='STOP_AFTER_CHROME_MENU_OBSERVATIONS_REQUIRES_REVIEW'
+
+OWNED_ADD_HOME_FLAG='--observe-owned-v15-add-home-dialog'
+
+def verified_current_menu_action(version_lines,proof):
+    if not isinstance(proof,dict) or proof is not STATE.get('ownedChromeMenuInput') or proof.get('tapCommandCompleted') is not True or proof.get('attempts')!=1 or STATE.get('UIInputCommands')!=4:raise Refused('CURRENT_OWN_MENU_ACTION_REQUIRED')
+    age=time.monotonic()-START-proof.get('tapCompletionBootSeconds',float('-inf'))
+    if not(0<=age<=90):raise Refused('OWN_MENU_ACTION_PROOF_EXPIRED')
+    nav=STATE.get('ownedLabNavigation',{})
+    if nav.get('url')!=OWNED_LAB_URL or nav.get('commandCompleted') is not True:raise Refused('OWNED_CURRENT_NAVIGATION_PROOF_REQUIRED')
+    label=proof.get('inputSnapshotLabel','')
+    if not re.fullmatch(r'owned-v15-before-native-chrome-menu-input-attempt-[1-3]',label):raise Refused('CURRENT_MENU_SNAPSHOT_LABEL_REQUIRED')
+    try:xml=(OUT/(label+'.xml')).read_bytes();png=(OUT/(label+'.png')).read_bytes()
+    except OSError:raise Refused('CURRENT_MENU_CONTEXT_BYTES_REQUIRED')
+    if hashlib.sha256(xml).hexdigest()!=proof.get('xmlSHA256') or hashlib.sha256(png).hexdigest()!=proof.get('pngSHA256') or owned_chrome_menu_target(xml,png,version_lines)!=proof.get('target'):raise Refused('CURRENT_MENU_CONTEXT_PIN_MISMATCH')
+
+def add_home_popup_target(xml,png,version_lines):
+    if {line.removeprefix('versionName=') for line in version_lines if line.startswith('versionName=')}!={'124.0.6367.219'}:raise Refused('REVIEWED_ADD_HOME_CHROME_VERSION_REQUIRED')
+    if len(xml)>2*1024*1024 or b'<!DOCTYPE' in xml.upper() or b'<!ENTITY' in xml.upper():raise Refused('ADD_HOME_XML_INVALID')
+    tree=ET.fromstring(xml);package='com.android.chrome';prefix=package+':id/';parents={id(c):e for e in tree.iter() for c in e}
+    packages={e.get('package') for e in tree.iter() if e.get('package')}
+    if package not in packages or not packages.issubset({package,'android','com.android.systemui'}):raise Refused('ADD_HOME_POPUP_FOREGROUND_REQUIRED')
+    if len(png)<24 or png[:8]!=b'\x89PNG\r\n\x1a\n' or png[12:16]!=b'IHDR':raise Refused('ADD_HOME_SCREEN_REQUIRED')
+    width=int.from_bytes(png[16:20],'big');height=int.from_bytes(png[20:24],'big')
+    if not(0<width<=16384 and 0<height<=16384):raise Refused('ADD_HOME_SCREEN_REQUIRED')
+    nodes=[e for e in tree.iter() if e.get('text')=='Add to Home screen']
+    if len(nodes)!=1:raise Refused('UNIQUE_REVIEWED_ADD_HOME_LABEL_REQUIRED')
+    text=nodes[0];row=parents.get(id(text));listing=parents.get(id(row))
+    if row is None or listing is None:raise Refused('EXACT_REVIEWED_ADD_HOME_HIERARCHY_REQUIRED')
+    for e in [text,row,listing]:
+        ancestor=e
+        while ancestor is not None:
+            if ancestor.get('enabled')=='false' or ancestor.get('visible-to-user')=='false' or ancestor.get('displayed')=='false':raise Refused('ADD_HOME_NODE_HIDDEN_OR_DISABLED')
+            ancestor=parents.get(id(ancestor))
+    def rect(e,suffix,klass,clickable):
+        if e.get('resource-id')!=prefix+suffix or e.get('package')!=package or e.get('class')!=klass or e.get('enabled')!='true' or e.get('clickable')!=clickable or e.get('content-desc','')!='':raise Refused('REVIEWED_ADD_HOME_NODE_MISMATCH')
+        m=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',e.get('bounds',''))
+        if not m:raise Refused('ADD_HOME_BOUNDS_REQUIRED')
+        r=list(map(int,m.groups()));x0,y0,x1,y1=r
+        if not(0<=x0<x1<=width and 0<=y0<y1<=height):raise Refused('ADD_HOME_BOUNDS_REQUIRED')
+        return r
+    tr=rect(text,'menu_item_text','android.widget.TextView','false');rr=rect(row,'universal_install','android.widget.LinearLayout','true');lr=rect(listing,'app_menu_list','android.widget.ListView','false')
+    if len([e for e in tree.iter() if e.get('resource-id')==prefix+'universal_install'])!=1 or len([e for e in tree.iter() if e.get('resource-id')==prefix+'app_menu_list'])!=1:raise Refused('UNIQUE_ADD_HOME_ROW_AND_LIST_REQUIRED')
+    if not(rr[0]<=tr[0]<tr[2]<=rr[2] and rr[1]<=tr[1]<tr[3]<=rr[3] and lr[0]<=rr[0]<rr[2]<=lr[2] and lr[1]<=rr[1]<rr[3]<=lr[3]):raise Refused('ADD_HOME_HIERARCHY_BOUNDS_MISMATCH')
+    if any(e.get('clickable')=='true' for e in row.iter() if e is not row):raise Refused('ADD_HOME_UNREVIEWED_NESTED_CLICK_TARGET')
+    return {'x':(tr[0]+tr[2])//2,'y':(tr[1]+tr[3])//2,'textBounds':tr,'rowBounds':rr,'screen':[width,height],'label':'Add to Home screen','textResourceId':prefix+'menu_item_text','clickableAncestorResourceId':prefix+'universal_install','listResourceId':prefix+'app_menu_list'}
+
+def tap_owned_add_home_and_observe(version_lines,menu_action):
+    verified_current_menu_action(version_lines,menu_action)
+    fresh=fresh_input_snapshot('owned-v15-before-add-home');xml=(OUT/(fresh['label']+'.xml')).read_bytes();png=(OUT/(fresh['label']+'.png')).read_bytes()
+    target=add_home_popup_target(xml,png,version_lines);verified_current_menu_action(version_lines,menu_action);age=time.monotonic()-fresh['captureStartMonotonic']
+    if not(0<=age<=10):raise Refused('ADD_HOME_INPUT_SNAPSHOT_TOO_OLD')
+    STATE['ownedAddHomeInput']={'inputSnapshotLabel':fresh['label'],'attempts':1,'target':target,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'snapshotAgeUpperBoundSeconds':age,'menuActionSnapshotLabel':menu_action['inputSnapshotLabel'],'finalConfirmationActions':0};STATE['UIInputCommands']+=1;save()
+    run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_owned_add_home_menu_row',timeout=5)
+    start=time.monotonic();deadline=min(start+70,START+CAP);rows=[];STATE['ownedAddHomeDialogObservations']=rows
+    transient={'UI_DUMP_REPORTED_ERROR','UI_DUMP_SUCCESS_MARKER_REQUIRED','UI_XML_INVALID','OWN_COMMAND_FAILED_ui_dump','OWN_COMMAND_FAILED_ui_xml','OWN_COMMAND_TIMEOUT_ui_dump','OWN_COMMAND_TIMEOUT_ui_xml','OWN_COMMAND_TIMEOUT_screen_png','CHROME_SCREEN_OBSERVATION_DEADLINE'}
+    for attempt in range(1,4):
+        delay=start+(attempt-1)*20-time.monotonic()
+        if delay>0:time.sleep(min(delay,max(0,deadline-time.monotonic())))
+        if time.monotonic()>=deadline:break
+        label='owned-v15-add-home-dialog-'+str(attempt);entry={'attempt':attempt,'label':label};rows.append(entry)
+        try:screen(label,observation_deadline=deadline)
+        except Refused as error:
+            if str(error) not in transient:raise
+            entry['status']='FRESH_XML_UNAVAILABLE';entry['code']=str(error);save();continue
+        entry['xmlFreshnessVerified']=True;entry['xmlSHA256']=hashlib.sha256((OUT/(label+'.xml')).read_bytes()).hexdigest();entry['pngSHA256']=hashlib.sha256((OUT/(label+'.png')).read_bytes()).hexdigest();save()
+    STATE['status']='STOP_AFTER_ADD_HOME_DIALOG_OBSERVATIONS_NO_CONFIRMATION';STATE['ownedAddHomeOutcome']='DIALOG_REQUIRES_REVIEW_NO_INSTALLED_PWA_VERDICT'
 
 def listener_guard():
     data,_,_=run(['ss','-ltn'],'selected_listeners')
