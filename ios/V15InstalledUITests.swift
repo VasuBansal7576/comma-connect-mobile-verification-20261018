@@ -7,6 +7,8 @@ import Network
     private let host = XCUIApplication(bundleIdentifier: "com.apple.webapp")
     private var largeWitnessMayExist = false
     private var addNameSelectorFailureRecorded = false
+    private var lastInstallCheckpoint = "not-started"
+    private var homeSearchFacts: [String: Any] = [:]
     private var ciSession: [String: Any]? = nil
     private let ciClientNonce = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
     private var ciDone = false
@@ -15,28 +17,22 @@ import Network
     override func tearDownWithError() throws {
         if ciSession != nil && !ciDone { _ = try? ciPost("/abort", extra: ["message": "Native test ended before full carrier DONE"]) }
         guard (testRun?.failureCount ?? 0) > 0 else { return }
+        let failedAfter = lastInstallCheckpoint
+        installCheckpoint("failure-teardown.before-screenshot")
         screen("v15-failure-screen")
-        // Selector failure already retains computed facts. Do not query AX again in teardown.
-        if addNameSelectorFailureRecorded { return }
-        let app = XCUIApplication(bundleIdentifier: "com.apple.webapp")
-        let names = ["Pin actual playlist", "Prepare playback", "Start pilot and run", "Start bare native", "Export all", "Freeze", "Pack frozen witness"]
-        var counts: [String: Int] = [:]
-        for name in names { counts[name] = app.buttons.matching(identifier: name).count }
-        let data = try JSONSerialization.data(withJSONObject: ["scope": "Small diagnostic AX button counts only; never a carrier", "largeWitnessMayExist": largeWitnessMayExist, "counts": counts], options: [.sortedKeys])
-        attachment("v15-failure-small-AX", String(decoding: data, as: UTF8.self))
-        if !largeWitnessMayExist && !addNameSelectorFailureRecorded {
-            // Existing seven WebClip button counts above already retain its small context.
-            let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
-            retainSmallContext("v15-failure-safari-context", in: safari, targets: [
-                ("button", "Share", safari.buttons.matching(identifier: "Share")),
-                ("button", "Add", safari.buttons.matching(identifier: "Add"))])
-            let home = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-            retainSmallContext("v15-failure-home-context", in: home, targets: [
-                ("icon", iconName, home.icons.matching(identifier: iconName)),
-                ("pageIndicator", "Page control", home.pageIndicators.matching(identifier: "Page control"))])
-        }
+        let facts: [String: Any] = ["failedAfter": failedAfter,
+            "largeWitnessMayExist": largeWitnessMayExist,
+            "addNameSelectorFailureRecorded": addNameSelectorFailureRecorded,
+            "ciSessionPresent": ciSession != nil, "ciDone": ciDone,
+            "homeSearch": homeSearchFacts,
+            "scope": "Already-computed flags/checkpoints only; no post-failure AX queries. Source carriers remain separate."]
+        let encoded = try JSONSerialization.data(withJSONObject: facts, options: [.sortedKeys])
+        FileHandle.standardOutput.write(Data("V15_FAILURE_FACTS ".utf8) + encoded + Data("\n".utf8))
+        attachment("v15-failure-computed-facts", String(decoding: encoded, as: UTF8.self))
+        installCheckpoint("failure-teardown.complete")
     }
     private func installCheckpoint(_ stage: String) {
+        lastInstallCheckpoint = stage
         // Direct small stdout write: no AX, app state, server or UI action needed to emit a checkpoint.
         let line = "V15_INSTALL_CHECKPOINT " + stage + " uptimeSeconds="
             + String(format: "%.3f", ProcessInfo.processInfo.systemUptime) + "\n"
@@ -70,10 +66,51 @@ import Network
         installCheckpoint("context." + name + ".after")
     }
     private func nativeSummaryTap(_ name: String, in app: XCUIApplication) {
-        let primary = app.buttons.matching(identifier: name).allElementsBoundByIndex.filter { $0.exists && $0.isHittable }
-        let hits = primary.isEmpty ? app.otherElements.matching(identifier: name).allElementsBoundByIndex.filter { $0.exists && $0.isHittable } : primary
-        XCTAssertEqual(hits.count, 1, "Ambiguous/unqualified actual summary AX type: " + name)
-        guard hits.count == 1 else { return }; hits[0].tap()
+        func candidates() -> [XCUIElement] {
+            let primary = app.buttons.matching(identifier: name).allElementsBoundByIndex.filter { $0.exists }
+            return primary.isEmpty
+                ? app.otherElements.matching(identifier: name).allElementsBoundByIndex.filter { $0.exists } : primary
+        }
+        for swipes in 0...3 {
+            let hits = candidates()
+            guard hits.count == 1 else { XCTFail("Unique actual summary required: " + name); return }
+            let target = hits[0]
+            if target.isHittable {
+                guard target.isEnabled else { XCTFail("Actual summary disabled: " + name); return }
+                target.tap(); return
+            }
+            guard swipes < 3 else { XCTFail("Summary remains offscreen after three native swipes: " + name); return }
+            installCheckpoint("Summary.visibility-swipe.before")
+            app.swipeUp()
+            installCheckpoint("Summary.visibility-swipe.after")
+        }
+    }
+    private func openEvidenceExport() {
+        let summaries = host.buttons.matching(identifier: "Evidence export").allElementsBoundByIndex
+            + host.otherElements.matching(identifier: "Evidence export").allElementsBoundByIndex
+        // Existing offscreen child means main is already open; hittability is not open state.
+        if !summaries.contains(where: { $0.exists }) { nativeSummaryTap("V15 verification controls", in: host) }
+        let menu = host.links.matching(NSPredicate(format: "label == %@", "Menu"))
+        if !menu.firstMatch.exists { nativeSummaryTap("Evidence export", in: host) }
+        XCTAssertTrue(menu.firstMatch.waitForExistence(timeout: 8), "Actual Evidence Menu child required")
+        XCTAssertEqual(menu.count, 1, "Unique Evidence Menu child required")
+    }
+    private func revealEvidenceMenu() {
+        openEvidenceExport()
+        let menu = host.links.matching(NSPredicate(format: "label == %@", "Menu"))
+        for _ in 0..<3 { if menu.element.isHittable { break }; host.swipeUp() }
+        XCTAssertTrue(menu.element.isHittable, "Actual Evidence Menu remains offscreen")
+    }
+    private func revealQuickResult(_ name: String, in app: XCUIApplication) {
+        // Stored Quick layout places these original buttons before Evidence export.
+        let query = app.buttons.matching(identifier: name)
+        for swipes in 0...3 {
+            let hits = query.allElementsBoundByIndex.filter { $0.exists }
+            guard hits.count == 1 else { XCTFail("Unique original Quick result required: " + name); return }
+            if hits[0].isHittable { return }
+            guard swipes < 3 else { XCTFail("Quick result remains offscreen after three native swipes: " + name); return }
+            app.swipeDown()
+        }
     }
     private func ensureQuickControls(in app: XCUIApplication) {
         _ = text(".*V15.*aca842c376c4.*", in: app, timeout: 30)
@@ -132,49 +169,95 @@ import Network
         XCTAssertTrue(q.firstMatch.waitForExistence(timeout: timeout), "Expected actual AX text: " + pattern)
         return q.firstMatch
     }
-    private func retainHome(_ name: String, home: XCUIApplication) {
-        screen("v15-" + name)
-        // Keep the existing screenshot; retain only the named icon and page indicator.
-        retainSmallContext("v15-" + name + "-context", in: home, targets: [
-            ("icon", iconName, home.icons.matching(identifier: iconName)),
-            ("pageIndicator", "Page control", home.pageIndicators.matching(identifier: "Page control"))])
+    private func homePage(_ value: String) -> (page: Int, total: Int)? {
+        let words = value.split(separator: " ")
+        guard words.count == 4, words[0] == "Page", words[2] == "of",
+              let page = Int(words[1]), let total = Int(words[3]),
+              page >= 1, page <= total, total <= 5 else { return nil }
+        return (page, total)
     }
-    private func launchHomeIcon(requireAudioControls: Bool = true) {
+    private func nextHomePage(_ value: String, visited: Set<Int>, swipes: Int) -> Int? {
+        guard swipes < 5, let current = homePage(value) else { return nil }
+        let remaining = (1...current.total).filter { $0 != current.page && !visited.contains($0) }
+        guard let target = remaining.min(by: {
+            let left = abs($0 - current.page), right = abs($1 - current.page)
+            return left == right ? $0 < $1 : left < right
+        }) else { return nil }
+        return current.page + (target > current.page ? 1 : -1)
+    }
+    private func installedHomeIcon() -> XCUIElement? {
         let home = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        // Add may already reveal the newly installed icon. A second Home press
-        // resets the selected page, so press only when Springboard is not foreground.
-        if home.state != .runningForeground { XCUIDevice.shared.press(.home) }
-        XCTAssertTrue(home.wait(for: .runningForeground, timeout: 5), "Springboard not foreground")
-        let q = home.icons.matching(identifier: iconName)
-        XCTAssertTrue(q.firstMatch.waitForExistence(timeout: 8), "No installed Home icon")
-        XCTAssertEqual(q.count, 1, "Unique actual V15 Home icon required")
-        let icon = q.element
-        for _ in 0..<4 {
-            if icon.isHittable { break }
-            let indicators = home.pageIndicators.matching(identifier: "Page control")
-            guard indicators.count == 1, let value = indicators.element.value as? String else {
-                retainHome("home-page-indicator-unavailable", home: home)
-                XCTFail("Unique actual Home-page indicator required"); break
+        let icons = home.icons.matching(identifier: iconName)
+        let indicators = home.pageIndicators.matching(identifier: "Page control")
+        func visibleIcon() -> XCUIElement? {
+            guard icons.count == 1 else { return nil }
+            let icon = icons.element
+            return icon.exists && icon.isHittable ? icon : nil
+        }
+        func actualPageValue() -> String? {
+            guard indicators.count == 1 else { return nil }
+            let indicator = indicators.element
+            guard indicator.exists && indicator.isHittable,
+                  let value = indicator.value as? String, homePage(value) != nil else { return nil }
+            return value
+        }
+        installCheckpoint("Home.find.begin")
+        let initialCount = icons.count
+        homeSearchFacts = ["initialIconCount": initialCount, "pressedHome": false, "swipes": 0]
+        guard initialCount <= 1 else { XCTFail("Ambiguous installed V15 Home icon"); return nil }
+        if let icon = visibleIcon() {
+            homeSearchFacts["uniqueVisibleIcon"] = true
+            return icon
+        }
+        // Springboard also owns App Switcher. Its foreground state alone is not Home.
+        installCheckpoint("Home.press.before")
+        XCUIDevice.shared.press(.home)
+        installCheckpoint("Home.press.after")
+        homeSearchFacts["pressedHome"] = true
+        guard home.wait(for: .runningForeground, timeout: 5) else {
+            XCTFail("Springboard did not become foreground after actual Home press"); return nil
+        }
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            visibleIcon() != nil || actualPageValue() != nil
+        }, object: nil)
+        guard XCTWaiter.wait(for: [ready], timeout: 8) == .completed else {
+            XCTFail("Actual Home requires a visible icon or qualified Page control; App Switcher is insufficient"); return nil
+        }
+        var visited = Set<Int>()
+        for swipes in 0...5 {
+            let count = icons.count
+            homeSearchFacts["iconCount"] = count
+            homeSearchFacts["swipes"] = swipes
+            guard count <= 1 else { XCTFail("Ambiguous installed V15 Home icon"); return nil }
+            if let icon = visibleIcon() { homeSearchFacts["uniqueVisibleIcon"] = true; return icon }
+            guard let value = actualPageValue(), let current = homePage(value) else {
+                XCTFail("Unique hittable actual Home Page control required before paging"); return nil
             }
-            let words = value.split(separator: " ")
-            guard words.count == 4, words[0] == "Page", words[2] == "of",
-                  let page = Int(words[1]), let total = Int(words[3]),
-                  page >= 1, total >= page, total <= 5, page < total else {
-                retainHome("home-page-boundary-refused", home: home)
-                XCTFail("Refuse unknown/last Home page; never swipe into App Library: " + value); break
+            visited.insert(current.page)
+            homeSearchFacts["pageValue"] = value
+            homeSearchFacts["visitedPages"] = visited.sorted()
+            guard let next = nextHomePage(value, visited: visited, swipes: swipes) else {
+                XCTFail("Installed icon absent within verified Home pages or five-swipe bound"); return nil
             }
-            let expected = "Page \(page + 1) of \(total)"
-            retainHome("home-before-next-page-\(page)", home: home)
-            home.swipeLeft()
+            let expected = "Page \(next) of \(current.total)"
+            homeSearchFacts["expectedPage"] = expected
+            installCheckpoint("Home.page-swipe.before")
+            if next > current.page { home.swipeLeft() } else { home.swipeRight() }
             let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", expected), object: indicators.element)
             guard XCTWaiter.wait(for: [changed], timeout: 3) == .completed else {
-                retainHome("home-page-transition-refused", home: home)
-                XCTFail("Actual Home page did not advance exactly to " + expected); break
+                XCTFail("Actual Home page did not move exactly to " + expected); return nil
             }
+            installCheckpoint("Home.page-swipe.after")
         }
-        retainHome("home-before-installed-icon-tap", home: home)
-        XCTAssertTrue(icon.isHittable, "Installed icon not visible on verified Home pages")
+        return nil
+    }
+    private func launchHomeIcon(requireAudioControls: Bool = true) {
+        guard let icon = installedHomeIcon() else { return }
+        screen("v15-home-before-installed-icon-tap")
+        XCTAssertTrue(icon.isHittable, "Installed icon must be visible on actual verified Home")
+        installCheckpoint("Home.icon-tap.before")
         icon.tap()
+        installCheckpoint("Home.icon-tap.after")
         // Query the real Web Clip host; never activate it or forge standalone flags.
         if requireAudioControls {
             ensureQuickControls(in: host)
@@ -272,17 +355,12 @@ import Network
     private func audioFreshEntryFromCurrentMenu() throws {
         // Same WebClip navigation only. Start from NF/URL/current App without requiring audio controls.
         XCTAssertEqual(host.state, .runningForeground)
-        let evidence = host.buttons.matching(identifier: "Evidence export").allElementsBoundByIndex
-            + host.otherElements.matching(identifier: "Evidence export").allElementsBoundByIndex
-        if !evidence.contains(where: { $0.exists && $0.isHittable }) {
-            nativeSummaryTap("V15 verification controls", in: host)
-        }
+        revealEvidenceMenu()
         func visibleMenu() -> [XCUIElement] {
             let buttons = host.buttons.matching(NSPredicate(format: "label == %@", "Menu")).allElementsBoundByIndex
             let links = host.links.matching(NSPredicate(format: "label == %@", "Menu")).allElementsBoundByIndex
             return (buttons + links).filter { $0.exists && $0.isEnabled && $0.isHittable }
         }
-        if visibleMenu().isEmpty { nativeSummaryTap("Evidence export", in: host) }
         let menuReady = XCTNSPredicateExpectation(predicate: NSPredicate { _,_ in visibleMenu().count == 1 }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [menuReady], timeout: 12), .completed, "Unique real same-WebClip Menu required")
         let menus = visibleMenu(); XCTAssertEqual(menus.count, 1)
@@ -331,10 +409,14 @@ import Network
         screen("v15-source-cleanup")
         nativeSummaryTap("V15 OS audio test", in: host)
         largeWitnessMayExist = true
+        revealQuickResult("Export all", in: host)
         uniqueTap("Export all", in: host)
+        revealQuickResult("Freeze", in: host)
         uniqueTap("Freeze", in: host)
         _ = text("Frozen [0-9]+ UTF-8 bytes;.*", in: host, timeout: 15)
+        revealQuickResult("Pack frozen witness", in: host)
         uniqueTap("Pack frozen witness", in: host)
+        revealEvidenceMenu()
         let packedStatus = text("Packed [0-9]+ UTF-8 carrier bytes; SHA-256 [0-9a-f]{64};.*", in: host, timeout: 20).label
         attachment("v15-packed-status", packedStatus)
         // Never query/debugDescription after large Freeze. Read one actual AX label and verify it.

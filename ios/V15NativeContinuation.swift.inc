@@ -34,38 +34,12 @@ extension V15InstalledUITests {
         nativeSummaryTap("V15 verification controls", in: host)
     }
     private func nfMenu() throws {
-        nfOpenMain()
-        if !host.links["Menu"].exists {
-            nativeSummaryTap("Evidence export", in: host)
-        }
+        openEvidenceExport()
         try nfNativeLink("Menu")
     }
     private func nfLaunchInstalledIcon() {
-        // Audio launchHomeIcon() additionally requires audio-only quick controls;
-        // this continuation intentionally works after NF/NG replaced that document.
-        let home = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        if home.state != .runningForeground { XCUIDevice.shared.press(.home) }
-        XCTAssertTrue(home.wait(for: .runningForeground, timeout: 5))
-        let icons = home.icons.matching(identifier: "V15 Audio Lab")
-        XCTAssertTrue(icons.firstMatch.waitForExistence(timeout: 8)); XCTAssertEqual(icons.count, 1)
-        for _ in 0..<4 {
-            if icons.element.isHittable { break }
-            let indicators = home.pageIndicators.matching(identifier: "Page control")
-            guard indicators.count == 1, let value = indicators.element.value as? String else {
-                XCTFail("Missing actual Home-page indicator"); return
-            }
-            let words = value.split(separator: " ")
-            guard words.count == 4, words[0] == "Page", words[2] == "of",
-                  let page = Int(words[1]), let total = Int(words[3]),
-                  page >= 1, page < total, total <= 5 else {
-                XCTFail("Refuse unknown/last Home page: " + value); return
-            }
-            screen("v15-nf-home-page-before-\(page)"); home.swipeLeft()
-            let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Page \(page + 1) of \(total)"), object: indicators.element)
-            XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 3), .completed)
-        }
-        screen("v15-nf-existing-home-icon"); XCTAssertTrue(icons.element.isHittable); icons.element.tap()
-        _ = text(".*V15.*aca842c376c4.*", in: host, timeout: 20)
+        // Shared actual-Home search; audio-only quick controls are not required after NF/NG.
+        launchHomeIcon(requireAudioControls: false)
     }
     private func nfNumber(_ value: Any?) throws -> Double {
         let number = try XCTUnwrap(value as? NSNumber)
@@ -288,11 +262,14 @@ extension V15InstalledUITests {
         if host.buttons["Freeze actual native witness"].exists {
             nativeSummaryTap("Native failure input controls", in: host)
         }
-        if !host.buttons["Freeze"].exists { nativeSummaryTap("Evidence export", in: host) }
+        openEvidenceExport()
+        revealQuickResult("Freeze", in: host)
         XCTAssertTrue(host.buttons["Freeze"].isHittable)
         uniqueTap("Freeze", in: host)
         let frozen = text("Frozen [0-9]+ UTF-8 bytes;.*", in: host, timeout: 15).label
+        revealQuickResult("Pack frozen witness", in: host)
         uniqueTap("Pack frozen witness", in: host)
+        revealEvidenceMenu()
         let status = text("Packed [0-9]+ UTF-8 carrier bytes; SHA-256 [0-9a-f]{64};.*", in: host, timeout: 20).label
         let q = host.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "{\"format\":\"v13-gzip-export-carrier-v1\""))
         XCTAssertTrue(q.firstMatch.waitForExistence(timeout: 8))

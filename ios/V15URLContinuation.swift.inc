@@ -40,22 +40,21 @@ extension V15InstalledUITests {
         // Its collapsed descendants must not obstruct actual history controls.
         let summaries = host.buttons.matching(identifier: "Evidence export").allElementsBoundByIndex
             + host.otherElements.matching(identifier: "Evidence export").allElementsBoundByIndex
-        if !summaries.contains(where: { $0.exists && $0.isHittable }) {
+        if !summaries.contains(where: { $0.exists }) {
             nativeSummaryTap("V15 verification controls", in: host)
         }
     }
 
     private func urlEvidencePanel() {
         urlDockOpen()
-        if !(host.buttons["Freeze"].exists && host.buttons["Freeze"].isHittable) {
-            nativeSummaryTap("Evidence export", in: host)
-        }
+        openEvidenceExport()
+        revealQuickResult("Freeze", in: host)
         XCTAssertTrue(host.buttons["Freeze"].isHittable, "Actual current Freeze must be AX-accessible")
     }
 
     private func urlMenu() throws {
         urlDockOpen()
-        if urlVisibleControls("Menu").isEmpty { nativeSummaryTap("Evidence export", in: host) }
+        revealEvidenceMenu()
         try urlTapControl("Menu")
         XCTAssertTrue(host.links["V15 URL/state controls"].waitForExistence(timeout: 12))
     }
@@ -74,7 +73,9 @@ extension V15InstalledUITests {
         largeWitnessMayExist = true
         uniqueTap("Freeze", in: host)
         let frozen = text("Frozen [0-9]+ UTF-8 bytes;.*", in: host, timeout: 15).label
+        revealQuickResult("Pack frozen witness", in: host)
         uniqueTap("Pack frozen witness", in: host)
+        revealEvidenceMenu()
         let packets = host.staticTexts.matching(NSPredicate(
             format: "label BEGINSWITH %@", "{\"format\":\"v13-gzip-export-carrier-v1\""
         ))
