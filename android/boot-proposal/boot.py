@@ -21,6 +21,7 @@ START=time.monotonic()
 CAP=360
 CHILDREN=[]
 TRACE=[]
+SCREEN_SEQUENCE=0
 STATE={'schema':'hosted-android-firstscreen-capability-v1','status':'STARTING','serial':SERIAL,'termsAcceptedByScript':False,'UIInputCommands':0,'PWAVerified':False,'audioMeasured':False,'children':[]}
 class Refused(Exception):pass
 
@@ -33,7 +34,7 @@ def remaining(limit):
     if value<=0:raise Refused('BOOT_PHASE_DEADLINE')
     return value
 
-def run(args,label,timeout=20,limit=65536,allowed_failure=False,env=None,retain_stdout=True):
+def run(args,label,timeout=20,limit=65536,allowed_failure=False,env=None,retain_stdout=True,reject_stderr_patterns=()):
     timeout=remaining(timeout)
     p=subprocess.Popen(args,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True,env=env)
     buffers=[bytearray(),bytearray()];counts=[0,0]
@@ -58,6 +59,7 @@ def run(args,label,timeout=20,limit=65536,allowed_failure=False,env=None,retain_
     (OUT/(label+'.log')).write_text(text)
     TRACE.append({'operation':label,'exitCode':p.returncode,'stdoutBytes':counts[0],'stderrBytes':counts[1],'retainedAtMostPerStream':limit})
     save()
+    if any(re.search(pattern,stderr.decode(errors='replace'),re.I) for pattern in reject_stderr_patterns):raise Refused('UI_DUMP_REPORTED_ERROR')
     if p.returncode and not allowed_failure:raise Refused('OWN_COMMAND_FAILED_'+label)
     return stdout,p.returncode,counts[0]>limit
 
@@ -114,20 +116,36 @@ def cleanup():
     save()
 
 def screen(label, observation_deadline=None):
+    global SCREEN_SEQUENCE
+    if not re.fullmatch(r'[a-z0-9-]+',label):raise Refused('OWN_SCREEN_LABEL_REQUIRED')
     def screen_timeout(limit):
         if observation_deadline is None:return limit
         left=observation_deadline-time.monotonic()
         if left<=0:raise Refused('CHROME_SCREEN_OBSERVATION_DEADLINE')
         return min(limit,left)
-    run([ADB,'-s',SERIAL,'shell','uiautomator','dump','/sdcard/ci-firstscreen.xml'],'ui_dump',timeout=screen_timeout(25))
-    data,_,truncated=run([ADB,'-s',SERIAL,'exec-out','cat','/sdcard/ci-firstscreen.xml'],'ui_xml',timeout=screen_timeout(15),limit=2*1024*1024)
-    if truncated or b'<!DOCTYPE' in data.upper() or b'<!ENTITY' in data.upper():raise Refused('UI_XML_INVALID')
-    try:tree=ET.fromstring(data)
-    except ET.ParseError:raise Refused('UI_XML_INVALID')
-    (OUT/(label+'.xml')).write_bytes(data)
+    SCREEN_SEQUENCE+=1
+    remote='/sdcard/ci-firstscreen-'+str(os.getpid())+'-'+str(SCREEN_SEQUENCE)+'.xml'
+    row={'label':label,'sequence':SCREEN_SEQUENCE,'captureStartBootSeconds':time.monotonic()-START,'remotePath':remote,'xmlFreshnessVerified':False}
+    STATE.setdefault('screenCaptures',[]).append(row);save()
+    xml_path=OUT/(label+'.xml');xml_path.unlink(missing_ok=True)
+    # Delete only this process/capture-owned path; never read the historical fixed XML.
+    run([ADB,'-s',SERIAL,'shell','rm','-f',remote],'remove_owned_capture_xml',timeout=screen_timeout(5))
+    xml_failure=None
+    try:
+        marker,_,cut=run([ADB,'-s',SERIAL,'shell','uiautomator','dump',remote],'ui_dump',timeout=screen_timeout(25),reject_stderr_patterns=(r'ERROR:',r'could not get idle state',r'null root node'))
+        if cut or marker.strip()!=('UI hierchary dumped to: '+remote).encode():raise Refused('UI_DUMP_SUCCESS_MARKER_REQUIRED')
+        data,_,truncated=run([ADB,'-s',SERIAL,'exec-out','cat',remote],'ui_xml',timeout=screen_timeout(15),limit=2*1024*1024)
+        if truncated or b'<!DOCTYPE' in data.upper() or b'<!ENTITY' in data.upper():raise Refused('UI_XML_INVALID')
+        try:tree=ET.fromstring(data)
+        except ET.ParseError:raise Refused('UI_XML_INVALID')
+        xml_path.write_bytes(data);row['xmlFreshnessVerified']=True;row['xmlSHA256']=hashlib.sha256(data).hexdigest();row['dumpSuccessMarkerVerified']=True
+    except Refused as error:
+        xml_failure=error;row['xmlFailureCode']=str(error)
     data,_,truncated=run([ADB,'-s',SERIAL,'exec-out','screencap','-p'],'screen_png',timeout=screen_timeout(15),limit=8*1024*1024)
     if truncated or not data.startswith(b'\x89PNG\r\n\x1a\n'):raise Refused('SCREENSHOT_INVALID')
-    (OUT/(label+'.png')).write_bytes(data)
+    (OUT/(label+'.png')).write_bytes(data);row['pngSHA256']=hashlib.sha256(data).hexdigest();row['captureEndBootSeconds']=time.monotonic()-START
+    row['status']='FRESH_XML_AND_SCREENSHOT_RETAINED' if not xml_failure else 'CURRENT_SCREENSHOT_XML_UNAVAILABLE';save()
+    if xml_failure:raise xml_failure
     return {e.get('package') for e in tree.iter() if e.get('package')}
 
 def chrome_meaningful_text(xml):
@@ -144,6 +162,8 @@ def observe_chrome_screen():
         label='chrome-first-screen' if attempt==1 else 'chrome-observation-'+str(attempt)
         try:packages=screen(label,observation_deadline=deadline)
         except Refused as error:
+            if str(error) in {'UI_DUMP_REPORTED_ERROR','UI_DUMP_SUCCESS_MARKER_REQUIRED','UI_XML_INVALID','OWN_COMMAND_FAILED_ui_dump','OWN_COMMAND_FAILED_ui_xml'}:
+                rows.append({'attempt':attempt,'status':'FRESH_XML_UNAVAILABLE','code':str(error)});save();continue
             if str(error) not in ['CHROME_SCREEN_OBSERVATION_DEADLINE','OWN_COMMAND_TIMEOUT_ui_dump','OWN_COMMAND_TIMEOUT_ui_xml','OWN_COMMAND_TIMEOUT_screen_png']:raise
             rows.append({'attempt':attempt,'status':'INCOMPLETE_BOUNDED_CAPTURE','code':str(error)})
             STATE['chromeObservationOutcome']='UNKNOWN_AT_OBSERVATION_DEADLINE';return
@@ -258,11 +278,37 @@ def maybe_approved_chrome_terms_action(version_lines,argv):
     STATE['UIInputCommands']=STATE.get('UIInputCommands',0)+1;save()
     run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_approved_chrome_use_without_account',timeout=5)
     STATE['termsAcceptedByScript']=None;STATE['termsAcceptanceActionDispatched']=True;STATE['termsAcceptanceOutcome']='UNVERIFIED_PENDING_POST_SCREEN_REVIEW';save()
-    screen('chrome-post-approved-terms-action',observation_deadline=min(time.monotonic()+30,START+CAP))
-    STATE['chromeTermsAction']['postXMLSHA256']=hashlib.sha256((OUT/'chrome-post-approved-terms-action.xml').read_bytes()).hexdigest()
-    STATE['chromeTermsAction']['postPNGSHA256']=hashlib.sha256((OUT/'chrome-post-approved-terms-action.png').read_bytes()).hexdigest()
+    observe_post_terms_readiness()
     STATE['status']='STOP_AFTER_APPROVED_CHROME_TERMS_ACTION_REQUIRES_REVIEW'
     return True
+
+def post_terms_is_new_meaningful_ui(xml):
+    if not chrome_meaningful_text(xml):return False
+    tree=ET.fromstring(xml)
+    if any(e.get('package') not in {None,'','com.android.chrome','com.android.systemui','android'} for e in tree.iter()):raise Refused('UNEXPECTED_POST_TERMS_PACKAGE')
+    # A newly dumped Welcome screen is not evidence that the Terms transition completed.
+    return not any(e.get('resource-id')=='com.android.chrome:id/title' and e.get('text')=='Welcome to Chrome' for e in tree.iter())
+
+def observe_post_terms_readiness():
+    start=time.monotonic();deadline=min(start+70,START+CAP);rows=[]
+    STATE['postTermsObservations']=rows
+    transient={'UI_DUMP_REPORTED_ERROR','UI_DUMP_SUCCESS_MARKER_REQUIRED','UI_XML_INVALID','OWN_COMMAND_FAILED_ui_xml','OWN_COMMAND_TIMEOUT_ui_dump','OWN_COMMAND_TIMEOUT_ui_xml','OWN_COMMAND_TIMEOUT_screen_png','CHROME_SCREEN_OBSERVATION_DEADLINE'}
+    for attempt in range(1,4):
+        delay=start+(attempt-1)*20-time.monotonic()
+        if delay>0:time.sleep(min(delay,max(0,deadline-time.monotonic())))
+        if time.monotonic()>=deadline:break
+        label='chrome-post-terms-observation-'+str(attempt)
+        row={'attempt':attempt,'label':label};rows.append(row)
+        try:screen(label,observation_deadline=deadline)
+        except Refused as error:
+            if str(error) not in transient:raise
+            row['status']='FRESH_XML_UNAVAILABLE';row['code']=str(error);save();continue
+        data=(OUT/(label+'.xml')).read_bytes()
+        row['xmlFreshnessVerified']=True;row['xmlSHA256']=hashlib.sha256(data).hexdigest();row['pngSHA256']=hashlib.sha256((OUT/(label+'.png')).read_bytes()).hexdigest()
+        row['newMeaningfulChromeUI']=post_terms_is_new_meaningful_ui(data);save()
+        if row['newMeaningfulChromeUI']:
+            STATE['postTermsObservationOutcome']='FRESH_NEW_CHROME_UI_REQUIRES_REVIEW';return
+    STATE['postTermsObservationOutcome']='UNKNOWN_AFTER_BOUNDED_FRESH_POST_TERMS_OBSERVATION'
 
 def listener_guard():
     data,_,_=run(['ss','-ltn'],'selected_listeners')
