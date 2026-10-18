@@ -1,0 +1,28 @@
+# Isolated test-only manual calibration; no Android, SDK, microphone or product runtime.
+name: Hosted native Pulse calibration
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  calibration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Official Ubuntu ephemeral FLOSS build and null-sink dependencies
+        timeout-minutes: 7
+        run: python3 audio/native-pulse/native_gate.py provision
+      - name: Compile, link and calibrate the original native monitor on hosted Linux
+        timeout-minutes: 3
+        run: python3 audio/native-pulse/native_gate.py calibrate
+      - name: Retain original raw samples, timing journal and command/cleanup receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-pulse-calibration-${{ github.run_id }}
+          path: evidence/native-pulse-calibration/
+          retention-days: 3
+          if-no-files-found: error
