@@ -1,0 +1,43 @@
+# PROPOSAL ONLY. Owner must review and explicitly choose hosted SDK setup; no terms are accepted.
+name: Hosted stable Android prerequisites proposal
+on:
+  workflow_dispatch:
+    inputs:
+      owner_reviewed_remote_sdk_setup:
+        description: Install only freshly SDK-verified stable packages on this ephemeral runner
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  prerequisites:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Fresh existing SDK parser and channel/revision/license evidence
+        run: python3 android/stable-setup/license-probe/probe.py
+      - name: Bind only stable already-accepted package revisions
+        run: python3 android/stable-setup/guard.py evidence/android-license-parser/receipt.json evidence/android-stable-setup/plan.json
+      - name: Install exact package IDs from stable channel with no input or license acceptance
+        if: inputs.owner_reviewed_remote_sdk_setup
+        run: |
+          mkdir -p evidence/android-stable-setup
+          timeout 600 /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --channel=0 "emulator" "system-images;android-35;google_apis_playstore;x86_64" </dev/null >evidence/android-stable-setup/sdk-install.log 2>&1
+      - name: Refuse changed installed revision or license-file bytes/mode
+        if: inputs.owner_reviewed_remote_sdk_setup
+        run: python3 android/stable-setup/verify-installed.py
+      - name: Retain only selected prerequisite receipts and bounded setup log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stable-android-prerequisites-${{ github.run_id }}
+          path: |
+            evidence/android-license-parser/receipt.json
+            evidence/android-license-parser/sdk-result.json
+            evidence/android-license-parser/*-diagnostic.txt
+            evidence/android-stable-setup/
+          retention-days: 3
+          if-no-files-found: error
