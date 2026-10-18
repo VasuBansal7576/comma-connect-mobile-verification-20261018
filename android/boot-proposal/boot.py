@@ -149,6 +149,27 @@ def screen(label, observation_deadline=None):
     if xml_failure:raise xml_failure
     return {e.get('package') for e in tree.iter() if e.get('package')}
 
+def fresh_input_snapshot(label):
+    if not re.fullmatch(r'[a-z0-9-]+',label):raise Refused('OWN_INPUT_SNAPSHOT_LABEL_REQUIRED')
+    helper_start=time.monotonic();deadline=min(helper_start+30,START+CAP)
+    row={'phase':label,'deadlineBootSeconds':deadline-START,'attempts':[]};STATE.setdefault('inputSnapshotReadiness',[]).append(row);save()
+    transient={'UI_DUMP_REPORTED_ERROR','UI_DUMP_SUCCESS_MARKER_REQUIRED','UI_XML_INVALID','OWN_COMMAND_FAILED_ui_dump','OWN_COMMAND_FAILED_ui_xml','OWN_COMMAND_TIMEOUT_ui_dump','OWN_COMMAND_TIMEOUT_ui_xml','OWN_COMMAND_TIMEOUT_screen_png','CHROME_SCREEN_OBSERVATION_DEADLINE'}
+    for attempt in range(1,4):
+        capture_start=time.monotonic()
+        if capture_start>=deadline:break
+        actual_label=label+'-input-attempt-'+str(attempt)
+        item={'attempt':attempt,'label':actual_label,'captureStartBootSeconds':capture_start-START};row['attempts'].append(item)
+        try:packages=screen(actual_label,observation_deadline=deadline)
+        except Refused as error:
+            if str(error) not in transient:raise
+            item['status']='FRESH_XML_UNAVAILABLE';item['code']=str(error);save();continue
+        complete=time.monotonic()
+        if complete<capture_start or complete>=deadline:
+            item['status']='READINESS_DEADLINE_CROSSED';save();raise Refused('INPUT_SNAPSHOT_READINESS_DEADLINE')
+        item['status']='FRESH_SNAPSHOT_RETAINED';item['captureCompleteBootSeconds']=complete-START;row['successfulLabel']=actual_label;save()
+        return {'label':actual_label,'captureStartMonotonic':capture_start,'captureCompleteMonotonic':complete,'packages':packages}
+    row['status']='EXHAUSTED_NO_INPUT_PERMITTED';save();raise Refused('INPUT_SNAPSHOT_READINESS_EXHAUSTED')
+
 def chrome_meaningful_text(xml):
     tree=ET.fromstring(xml)
     return [e for e in tree.iter() if e.get('package')=='com.android.chrome' and (e.get('text','').strip() or e.get('content-desc','').strip())]
@@ -201,11 +222,12 @@ def launcher_chrome_target(xml,png):
     return candidates[0]
 
 def launch_chrome_from_fresh_icon():
-    capture_start=time.monotonic();screen('android-pre-chrome-launch')
-    xml=(OUT/'android-pre-chrome-launch.xml').read_bytes();png=(OUT/'android-pre-chrome-launch.png').read_bytes()
+    fresh=fresh_input_snapshot('android-pre-chrome-launch');capture_start=fresh['captureStartMonotonic']
+    xml=(OUT/(fresh['label']+'.xml')).read_bytes();png=(OUT/(fresh['label']+'.png')).read_bytes()
     target=launcher_chrome_target(xml,png)
-    if time.monotonic()-capture_start>10:raise Refused('LAUNCHER_ICON_SNAPSHOT_TOO_OLD')
-    STATE['chromeLaunchInput']={'kind':'single-native-launcher-icon-tap','xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'target':target,'snapshotAgeUpperBoundSeconds':time.monotonic()-capture_start,'attempts':1}
+    age=time.monotonic()-capture_start
+    if not(0<=age<=10):raise Refused('LAUNCHER_ICON_SNAPSHOT_TOO_OLD')
+    STATE['chromeLaunchInput']={'inputSnapshotLabel':fresh['label'],'kind':'single-native-launcher-icon-tap','xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'target':target,'snapshotAgeUpperBoundSeconds':age,'attempts':1}
     STATE['UIInputCommands']=1;save()
     run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_fresh_chrome_launcher_icon',timeout=5)
 
@@ -270,12 +292,12 @@ def chrome_terms_target(xml,png,version_lines):
 def maybe_approved_chrome_terms_action(version_lines,argv):
     if CHROME_TERMS_APPROVAL_FLAG not in argv:return False
     if argv not in [[CHROME_TERMS_APPROVAL_FLAG],[CHROME_TERMS_APPROVAL_FLAG,OWNED_LAB_CONTINUATION_FLAG],[CHROME_TERMS_APPROVAL_FLAG,OWNED_LAB_CONTINUATION_FLAG,OWNED_MENU_OBSERVATION_FLAG]]:raise Refused('EXACT_REVIEWED_CONTINUATION_FLAGS_REQUIRED')
-    capture_start=time.monotonic();screen('chrome-before-approved-terms-action')
-    xml=(OUT/'chrome-before-approved-terms-action.xml').read_bytes();png=(OUT/'chrome-before-approved-terms-action.png').read_bytes()
+    fresh=fresh_input_snapshot('chrome-before-approved-terms-action');capture_start=fresh['captureStartMonotonic']
+    xml=(OUT/(fresh['label']+'.xml')).read_bytes();png=(OUT/(fresh['label']+'.png')).read_bytes()
     target=chrome_terms_target(xml,png,version_lines)
     age=time.monotonic()-capture_start
     if not(0<=age<=10):raise Refused('CHROME_TERMS_SNAPSHOT_TOO_OLD')
-    STATE['chromeTermsAction']={'explicitOptInFlagProvided':True,'reviewedVersion':'124.0.6367.219','acceptsDisplayedTermsOfService':True,'displayedUsageAndCrashDataDisclosure':True,'createsOrSignsIntoAccount':False,'target':target,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'snapshotAgeUpperBoundSeconds':age,'attempts':1,'postScreenRequired':True}
+    STATE['chromeTermsAction']={'inputSnapshotLabel':fresh['label'],'explicitOptInFlagProvided':True,'reviewedVersion':'124.0.6367.219','acceptsDisplayedTermsOfService':True,'displayedUsageAndCrashDataDisclosure':True,'createsOrSignsIntoAccount':False,'target':target,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'snapshotAgeUpperBoundSeconds':age,'attempts':1,'postScreenRequired':True}
     STATE['UIInputCommands']=STATE.get('UIInputCommands',0)+1;save()
     run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_approved_chrome_use_without_account',timeout=5)
     STATE['termsAcceptedByScript']=None;STATE['termsAcceptanceActionDispatched']=True;STATE['termsAcceptanceOutcome']='UNVERIFIED_PENDING_POST_SCREEN_REVIEW';save()
@@ -383,11 +405,11 @@ def observe_owned_lab_native_ui():
 def continue_owned_lab_after_reviewed_privacy_notice(version_lines,observe_menu=False):
     # Optional owned-test continuation only; no Settings/dropdown/account/legal action.
     view_command=owned_lab_view_command()
-    capture_start=time.monotonic();screen('chrome-before-reviewed-privacy-ack')
-    xml=(OUT/'chrome-before-reviewed-privacy-ack.xml').read_bytes();png=(OUT/'chrome-before-reviewed-privacy-ack.png').read_bytes()
+    fresh=fresh_input_snapshot('chrome-before-reviewed-privacy-ack');capture_start=fresh['captureStartMonotonic']
+    xml=(OUT/(fresh['label']+'.xml')).read_bytes();png=(OUT/(fresh['label']+'.png')).read_bytes()
     target=privacy_notice_target(xml,png,version_lines);age=time.monotonic()-capture_start
     if not(0<=age<=10):raise Refused('PRIVACY_NOTICE_SNAPSHOT_TOO_OLD')
-    STATE['privacyNoticeAcknowledgement']={'explicitOwnedContinuationFlag':True,'attempts':1,'target':target,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'snapshotAgeUpperBoundSeconds':age,'actionScope':'Acknowledge exact reviewed notice; no Settings/dropdown/account interaction. No further agreement accepted.'}
+    STATE['privacyNoticeAcknowledgement']={'inputSnapshotLabel':fresh['label'],'explicitOwnedContinuationFlag':True,'attempts':1,'target':target,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'snapshotAgeUpperBoundSeconds':age,'actionScope':'Acknowledge exact reviewed notice; no Settings/dropdown/account interaction. No further agreement accepted.'}
     STATE['UIInputCommands']=STATE.get('UIInputCommands',0)+1;save()
     run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_reviewed_privacy_got_it',timeout=5)
     STATE['privacyNoticeAcknowledgement']['tapCommandCompleted']=True;STATE['ownedLabNavigation']={'action':'android.intent.action.VIEW','package':'com.android.chrome','url':OWNED_LAB_URL,'attempts':1};save()
@@ -434,11 +456,11 @@ def owned_chrome_menu_target(xml,png,version_lines):
     return {'x':x,'y':y,'bounds':r,'screen':[width,height],'resourceId':prefix+'menu_button','contentDescription':menu.get('content-desc'),'observedAddress':address.get('text'),'badge':'V15 aca842c376c4','webViewClass':webview.get('class'),'scope':'Native context only; badge is not a full byte-pin or installed-PWA proof.'}
 
 def open_owned_chrome_menu_and_observe(version_lines):
-    capture_start=time.monotonic();screen('owned-v15-before-native-chrome-menu')
-    xml=(OUT/'owned-v15-before-native-chrome-menu.xml').read_bytes();png=(OUT/'owned-v15-before-native-chrome-menu.png').read_bytes()
+    fresh=fresh_input_snapshot('owned-v15-before-native-chrome-menu');capture_start=fresh['captureStartMonotonic']
+    xml=(OUT/(fresh['label']+'.xml')).read_bytes();png=(OUT/(fresh['label']+'.png')).read_bytes()
     target=owned_chrome_menu_target(xml,png,version_lines);age=time.monotonic()-capture_start
     if not(0<=age<=10):raise Refused('OWNED_MENU_SNAPSHOT_TOO_OLD')
-    STATE['ownedChromeMenuInput']={'explicitObservationFlag':True,'attempts':1,'target':target,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'snapshotAgeUpperBoundSeconds':age,'installOrAddHomeActions':0}
+    STATE['ownedChromeMenuInput']={'inputSnapshotLabel':fresh['label'],'explicitObservationFlag':True,'attempts':1,'target':target,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'snapshotAgeUpperBoundSeconds':age,'installOrAddHomeActions':0}
     STATE['UIInputCommands']=STATE.get('UIInputCommands',0)+1;save()
     run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_owned_native_chrome_menu',timeout=5)
     start=time.monotonic();deadline=min(start+70,START+CAP);rows=[];STATE['ownedChromeMenuObservations']=rows
@@ -548,7 +570,7 @@ def main():
             if emu.poll() is not None:
                 STATE['emulatorEarlyExitCode']=emu.returncode;save();raise Refused('EMULATOR_EXITED_BEFORE_BOOT')
             raise Refused('BOOT_NOT_COMPLETE_WITHIN_180S')
-        listener_guard();packages=screen('android-first-screen');STATE['androidFirstScreenPackages']=sorted(packages)
+        listener_guard();first=fresh_input_snapshot('android-first-screen');packages=first['packages'];STATE['androidFirstScreenLabel']=first['label'];STATE['androidFirstScreenPackages']=sorted(packages)
         if not firstscreen_can_launch_chrome(packages):STATE['status']='STOP_ANDROID_FIRST_RUN_OR_NONLAUNCHER_UI_REQUIRES_REVIEW';return 0
         data,_,_=run([ADB,'-s',SERIAL,'shell','pm','list','packages','com.android.chrome'],'chrome_package')
         if b'package:com.android.chrome' not in data:raise Refused('ANDROID_CHROME_NOT_PRESENT')

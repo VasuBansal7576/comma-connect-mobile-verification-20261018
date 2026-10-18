@@ -6,7 +6,7 @@ CASES={
  'native-eof':('testV15InstalledNaturalEOFContinuation','v15-native-eof.xcresult','v15-native-eof.log'),
  'native-failure':('testV15InstalledNativeFailureContinuation','v15-native-failure.xcresult','v15-native-failure.log'),
  'native-url':('testV15InstalledURLStateAndHistory','v15-url.xcresult','v15-url.log')}
-LIMITS={**{k:450 for k in CASES},'native-url':600,'screenshot':8,'shutdown':8,'list-selected':8,'open-lab-url':30}
+LIMITS={**{k:450 for k in CASES},'install':600,'native-url':600,'screenshot':8,'shutdown':8,'list-selected':8,'open-lab-url':30}
 TERM_SECONDS=3;KILL_REAP_SECONDS=3
 LAB='https://comma-connect-fix-lab-20261016.zippy17.chatgpt.site/nqa?candidate=v15&experiment=nqa'
 

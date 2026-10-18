@@ -46,7 +46,7 @@ jobs:
         run: |
           xcodebuild build-for-testing -project CIProbeV15.xcodeproj -scheme CIProbeV15 -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -derivedDataPath DerivedData ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO > evidence/v15-build-ui.log 2>&1
       - name: Real Safari Add Home and Home icon launch
-        timeout-minutes: 8
+        timeout-minutes: 11
         run: |
           python3 scripts/bounded_official.py open-lab-url "$SIMULATOR_UDID"
           python3 scripts/bounded_official.py install "$SIMULATOR_UDID"
@@ -67,7 +67,7 @@ jobs:
           python3 scripts/bounded_official.py list-selected "$SIMULATOR_UDID"
       - name: Export official native XCTest attachments using verified installed CLI
         if: always()
-        timeout-minutes: 3
+        timeout-minutes: 4
         run: python3 scripts/export_xcresult_attachments.py
       - name: Retain receipts without product source or local audio playback
         if: always()

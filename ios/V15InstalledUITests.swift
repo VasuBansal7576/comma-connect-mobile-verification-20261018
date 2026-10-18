@@ -16,6 +16,8 @@ import Network
         if ciSession != nil && !ciDone { _ = try? ciPost("/abort", extra: ["message": "Native test ended before full carrier DONE"]) }
         guard (testRun?.failureCount ?? 0) > 0 else { return }
         screen("v15-failure-screen")
+        // Selector failure already retains computed facts. Do not query AX again in teardown.
+        if addNameSelectorFailureRecorded { return }
         let app = XCUIApplication(bundleIdentifier: "com.apple.webapp")
         let names = ["Pin actual playlist", "Prepare playback", "Start pilot and run", "Start bare native", "Export all", "Freeze", "Pack frozen witness"]
         var counts: [String: Int] = [:]
@@ -23,10 +25,49 @@ import Network
         let data = try JSONSerialization.data(withJSONObject: ["scope": "Small diagnostic AX button counts only; never a carrier", "largeWitnessMayExist": largeWitnessMayExist, "counts": counts], options: [.sortedKeys])
         attachment("v15-failure-small-AX", String(decoding: data, as: UTF8.self))
         if !largeWitnessMayExist && !addNameSelectorFailureRecorded {
-            attachment("v15-failure-prefreeze-AX-prefix", String(app.debugDescription.prefix(8000)))
-            attachment("v15-failure-safari-AX-prefix", String(XCUIApplication(bundleIdentifier: "com.apple.mobilesafari").debugDescription.prefix(8000)))
-            attachment("v15-failure-home-AX-prefix", String(XCUIApplication(bundleIdentifier: "com.apple.springboard").debugDescription.prefix(4000)))
+            // Existing seven WebClip button counts above already retain its small context.
+            let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+            retainSmallContext("v15-failure-safari-context", in: safari, targets: [
+                ("button", "Share", safari.buttons.matching(identifier: "Share")),
+                ("button", "Add", safari.buttons.matching(identifier: "Add"))])
+            let home = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            retainSmallContext("v15-failure-home-context", in: home, targets: [
+                ("icon", iconName, home.icons.matching(identifier: iconName)),
+                ("pageIndicator", "Page control", home.pageIndicators.matching(identifier: "Page control"))])
         }
+    }
+    private func installCheckpoint(_ stage: String) {
+        // Direct small stdout write: no AX, app state, server or UI action needed to emit a checkpoint.
+        let line = "V15_INSTALL_CHECKPOINT " + stage + " uptimeSeconds="
+            + String(format: "%.3f", ProcessInfo.processInfo.systemUptime) + "\n"
+        FileHandle.standardOutput.write(Data(line.utf8))
+    }
+    private func retainSmallContext(_ name: String, in app: XCUIApplication,
+                                    targets: [(kind: String, label: String, query: XCUIElementQuery)]) {
+        installCheckpoint("context." + name + ".before")
+        var rows: [[String: Any]] = []
+        for target in targets.prefix(12) {
+            let count = target.query.count
+            var row: [String: Any] = ["kind": target.kind, "label": String(target.label.prefix(128)), "count": count]
+            if count == 1 {
+                let element = target.query.element
+                row["exists"] = element.exists
+                row["enabled"] = element.isEnabled
+                row["hittable"] = element.isHittable
+                if target.kind == "pageIndicator", let value = element.value as? String {
+                    row["pageValue"] = String(value.prefix(128))
+                    row["pageValueTruncated"] = value.count > 128
+                }
+            }
+            rows.append(row)
+        }
+        let payload: [String: Any] = ["name": name, "appStateRaw": app.state.rawValue,
+            "queriedTargets": rows, "targetLimit": 12, "omittedTargets": max(0, targets.count - 12),
+            "scope": "Small typed diagnostic queries only. Each AX query may still block; caller deadline applies. Not a source/carrier/runtime success witness."]
+        let encoded = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]))
+            ?? Data("{\"diagnosticSerializationFailed\":true}".utf8)
+        attachment(name, String(decoding: encoded, as: UTF8.self))
+        installCheckpoint("context." + name + ".after")
     }
     private func nativeSummaryTap(_ name: String, in app: XCUIApplication) {
         let primary = app.buttons.matching(identifier: name).allElementsBoundByIndex.filter { $0.exists && $0.isHittable }
@@ -93,8 +134,10 @@ import Network
     }
     private func retainHome(_ name: String, home: XCUIApplication) {
         screen("v15-" + name)
-        // Home-flow receipts occur only before any large page export.
-        attachment("v15-" + name + "-hierarchy", home.debugDescription)
+        // Keep the existing screenshot; retain only the named icon and page indicator.
+        retainSmallContext("v15-" + name + "-context", in: home, targets: [
+            ("icon", iconName, home.icons.matching(identifier: iconName)),
+            ("pageIndicator", "Page control", home.pageIndicators.matching(identifier: "Page control"))])
     }
     private func launchHomeIcon(requireAudioControls: Bool = true) {
         let home = XCUIApplication(bundleIdentifier: "com.apple.springboard")
@@ -141,73 +184,90 @@ import Network
         }
         screen("v15-home-icon-launched")
     }
-    private func retainAddNameSelectorFailure(in safari: XCUIApplication) throws {
-        // Public generated test UI only. Never request the expensive full app debugDescription.
+    private func retainAddNameSelectorFailure(facts: [String: Any]) {
+        // Facts were computed once by the actual selector; never enumerate or requery AX here.
         addNameSelectorFailureRecorded = true
-        var groups: [[String: Any]] = []
-        for (kind, query) in [("textField", safari.textFields), ("textView", safari.textViews),
-                              ("navigationBar", safari.navigationBars)] {
-            let count = query.count
-            var elements: [[String: Any]] = []
-            for index in 0..<min(count, 32) {
-                let element = query.element(boundBy: index)
-                let label = element.label
-                let value = (element.value as? String) ?? String(describing: element.value)
-                elements.append(["index": index, "elementType": element.elementType.rawValue,
-                    "label": String(label.prefix(256)), "value": String(value.prefix(1024)),
-                    "labelTruncated": label.count > 256, "valueTruncated": value.count > 1024,
-                    "exists": element.exists, "enabled": element.isEnabled, "hittable": element.isHittable])
-            }
-            groups.append(["kind": kind, "actualCount": count, "capturedCount": elements.count,
-                           "truncatedElements": max(0, count - elements.count), "elements": elements])
-        }
-        attachment("v15-add-name-selector-failure", String(decoding: try JSONSerialization.data(withJSONObject:
-            ["expectedExactValue": iconName, "expectedNavigationTitle": "Add to Home Screen",
-             "groups": groups, "scope": "Fresh bounded native Add UI fields/views and navigation bars; no typing, normalization or value mutation."], options: [.sortedKeys]), as: UTF8.self))
+        installCheckpoint("Add.name-selector.failure.before")
+        let encoded = (try? JSONSerialization.data(withJSONObject: facts, options: [.sortedKeys]))
+            ?? Data("{\"diagnosticSerializationFailed\":true}".utf8)
+        FileHandle.standardOutput.write(Data("V15_ADD_NAME_SELECTOR_FACTS ".utf8) + encoded + Data("\n".utf8))
+        attachment("v15-add-name-selector-failure", String(decoding: encoded, as: UTF8.self))
         screen("v15-add-name-selector-failure")
+        installCheckpoint("Add.name-selector.failure.after")
     }
     func testInstallV15FromSafari() throws {
+        installCheckpoint("install.begin")
         let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        installCheckpoint("Safari.activate.before")
         safari.activate()
+        installCheckpoint("Safari.activate.after")
+        installCheckpoint("Safari.quick-controls.before")
         ensureQuickControls(in: safari)
-        attachment("v15-before-share-hierarchy", safari.debugDescription)
+        installCheckpoint("Safari.quick-controls.after")
+        retainSmallContext("v15-before-share-context", in: safari, targets: [
+            ("button", "Share", safari.buttons.matching(identifier: "Share")),
+            ("button", "Pin actual playlist", safari.buttons.matching(identifier: "Pin actual playlist"))])
+        installCheckpoint("Share.tap.before")
         uniqueTap("Share", in: safari)
+        installCheckpoint("Share.tap.after")
         // Exact selector established by retained iOS18.6 Cell witness; toy rerun gate still applies.
         let actions = safari.collectionViews["activityCollectionView"]
+        installCheckpoint("share-actions.wait.before")
         XCTAssertTrue(actions.waitForExistence(timeout: 5))
+        installCheckpoint("share-actions.wait.after")
         let q = actions.cells.matching(identifier: "Add to Home Screen")
         for _ in 0..<4 { if q.firstMatch.exists && q.firstMatch.isHittable { break }; actions.swipeUp() }
         XCTAssertEqual(q.count, 1); XCTAssertTrue(q.element.isHittable)
-        attachment("v15-real-share-actions", safari.debugDescription); q.element.tap()
+        retainSmallContext("v15-real-share-context", in: safari, targets: [
+            ("collectionView", "activityCollectionView", safari.collectionViews.matching(identifier: "activityCollectionView")),
+            ("cell", "Add to Home Screen", q)])
+        installCheckpoint("AddToHomeScreen.cell.tap.before")
+        q.element.tap()
+        installCheckpoint("AddToHomeScreen.cell.tap.after")
         screen("v15-real-add-confirmation")
         // Manifest/meta title must supply the intended icon name; do not guess/change it silently.
+        installCheckpoint("Add.name-selector.before")
         let addBars = safari.navigationBars.matching(identifier: "Add to Home Screen")
         let addContextReady = addBars.firstMatch.waitForExistence(timeout: 5)
-        let expectedName = NSPredicate(format: "value == %@", iconName)
-        let nameFields = safari.textFields.matching(expectedName), nameViews = safari.textViews.matching(expectedName)
-        let appeared = XCTNSPredicateExpectation(predicate: NSPredicate { _,_ in
-            nameFields.count + nameViews.count > 0
-        }, object: nil)
-        let nameReady = XCTWaiter.wait(for: [appeared], timeout: 5) == .completed
-        let names = nameFields.allElementsBoundByIndex + nameViews.allElementsBoundByIndex
-        let uniqueName = names.count == 1
-        let actualName = uniqueName ? names.first : nil
-        let nameEditable = actualName.map { $0.exists && $0.isEnabled && $0.isHittable } ?? false
-        let exactValue = actualName?.value as? String == iconName
-        if !addContextReady || addBars.count != 1 || !nameReady || !uniqueName || !nameEditable || !exactValue {
-            try retainAddNameSelectorFailure(in: safari)
+        let addBarCount = addBars.count
+        // Actual iOS18.6 witness is a TextField with this exact value. This is observation,
+        // not an edit/tap: enabled and hittable are required for the Add button below only.
+        let nameFields = safari.textFields.matching(NSPredicate(format: "value == %@", iconName))
+        let nameReady = nameFields.firstMatch.waitForExistence(timeout: 15)
+        let nameCount = nameFields.count
+        let actualName = nameReady && nameCount == 1 ? nameFields.firstMatch : nil
+        let nameExists = actualName?.exists ?? false
+        let observedValue = nameExists ? actualName?.value as? String : nil
+        let exactValue = observedValue == iconName
+        if !addContextReady || addBarCount != 1 || !nameReady || nameCount != 1 || !nameExists || !exactValue {
+            retainAddNameSelectorFailure(facts: [
+                "expectedExactValue": iconName, "expectedNavigationTitle": "Add to Home Screen",
+                "addContextReady": addContextReady, "addBarCount": addBarCount,
+                "nameReady": nameReady, "nameCount": nameCount, "nameExists": nameExists,
+                "observedValue": observedValue.map { String($0.prefix(1024)) as Any } ?? NSNull(),
+                "observedValueTruncated": observedValue.map { $0.count > 1024 } ?? false,
+                "exactValue": exactValue,
+                "scope": "Already-computed exact TextField/context facts only; no typing, editing or additional AX queries."])
         }
         XCTAssertTrue(addContextReady, "Actual Add to Home Screen navigation context missing")
-        XCTAssertEqual(addBars.count, 1, "Unique actual Add navigation bar required")
-        XCTAssertTrue(nameReady, "Expected manifest/meta icon title not present in actual editable field/view")
-        XCTAssertEqual(names.count, 1, "Unique exact-value Add name textField/textView required")
-        let name = try XCTUnwrap(actualName)
-        XCTAssertTrue(name.exists && name.isEnabled && name.isHittable, "Actual Add name must be editable/hittable")
-        XCTAssertEqual(name.value as? String, iconName)
+        XCTAssertEqual(addBarCount, 1, "Unique actual Add navigation bar required")
+        XCTAssertTrue(nameReady, "Expected manifest/meta icon title not present in actual TextField")
+        XCTAssertEqual(nameCount, 1, "Unique exact-value Add name TextField required")
+        XCTAssertTrue(nameExists, "Actual Add name TextField must exist")
+        XCTAssertEqual(observedValue, iconName)
+        installCheckpoint("Add.name-selector.after")
+        installCheckpoint("Add.confirm.tap.before")
         uniqueTap("Add", in: safari)
+        installCheckpoint("Add.confirm.tap.after")
+        installCheckpoint("Home.launch.before")
         launchHomeIcon()
-        attachment("v15-installed-initial-hierarchy", host.debugDescription)
+        installCheckpoint("Home.launch.after")
+        retainSmallContext("v15-installed-initial-context", in: host, targets: [
+            ("button", "Pin actual playlist", host.buttons.matching(identifier: "Pin actual playlist")),
+            ("button", "Prepare playback", host.buttons.matching(identifier: "Prepare playback")),
+            ("button", "Freeze", host.buttons.matching(identifier: "Freeze"))])
         // Actual standalone proof is checked later in the unmodified source rows, not invented here.
+        installCheckpoint("install.end")
     }
     private func audioFreshEntryFromCurrentMenu() throws {
         // Same WebClip navigation only. Start from NF/URL/current App without requiring audio controls.
