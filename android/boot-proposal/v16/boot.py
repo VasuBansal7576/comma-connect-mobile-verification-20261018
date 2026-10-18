@@ -958,15 +958,49 @@ def verified_post_install_readiness(version_lines):
 
 
 def observed_bodyless_chrome_after_placement(xml,png,version_lines):
-    # Exact actual39122783965 native-only state: permits a readonly retry, NEVER input.
+    # Native Chrome structure permits bounded READONLY retry, NEVER ready/input.
     if {line.removeprefix('versionName=')for line in version_lines if line.startswith('versionName=')}!={'124.0.6367.219'}:return False
     if len(xml)>2*1024*1024 or b'<!DOCTYPE'in xml.upper()or b'<!ENTITY'in xml.upper():return False
-    if len(png)<24 or png[:8]!=b'\x89PNG\r\n\x1a\n'or png[12:16]!=b'IHDR'or [int.from_bytes(png[16:20],'big'),int.from_bytes(png[20:24],'big')]!=[1080,2400]:return False
+    if len(png)<24 or png[:8]!=b'\x89PNG\r\n\x1a\n'or png[12:16]!=b'IHDR':return False
+    width=int.from_bytes(png[16:20],'big');height=int.from_bytes(png[20:24],'big')
+    if not(0<width<=16384 and 0<height<=16384):return False
     try:tree=ET.fromstring(xml)
     except ET.ParseError:return False
-    def shape(e):return [e.tag,dict(e.attrib),[shape(c)for c in e]]
-    canonical=json.dumps(shape(tree),sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
-    return hashlib.sha256(canonical).hexdigest()=='4b1420738880857e758ea6db1c695e10f7dba46e2bca78529ac207c37224715d'
+    if tree.tag!='hierarchy' or tree.get('rotation')!='0' or len(tree)!=1 or sum(1 for _ in tree.iter())>64:return False
+    chrome='com.android.chrome';prefix=chrome+':id/'
+    def n(klass,rid='',desc='',click='false',children=(),text=''):
+        return (klass,('android:id/'+rid[8:]if rid.startswith('android:')else prefix+rid if rid else ''),desc,click,children,text)
+    F='android.widget.FrameLayout';L='android.widget.LinearLayout';V='android.view.View';I='android.widget.ImageButton'
+    status=n(L,'location_bar_status','', 'true',(
+        n(L,'location_bar_status_icon_view',children=(n(F,'location_bar_status_icon_frame',children=(
+            n('android.widget.ImageView','location_bar_status_icon','Connection is secure'),)),)),))
+    location=n(F,'location_bar',children=(status,n('android.widget.EditText','url_bar',click='true',text=None)))
+    buttons=n(L,'toolbar_buttons',children=(
+        n(F,'optional_toolbar_button_container',children=(n(I,'optional_toolbar_button','New tab','true'),)),
+        n(I,'tab_switcher_button','Switch or close tabs','true'),
+        n(F,'menu_button_wrapper',children=(n(I,'menu_button','Customize and control Google Chrome','true'),))))
+    toolbar=n(F,'toolbar',children=(n(I,'home_button','Open the home page','true'),location,buttons))
+    controls=n(F,'control_container',children=(n(F,'toolbar_container',children=(toolbar,n('android.widget.ImageView','toolbar_hairline'))),))
+    compositor=n(F,'compositor_view_holder',children=(n(F,children=(n(V),)),n(F,desc='Web View')))
+    content=n(F,'android:content',children=(n('android.view.ViewGroup','coordinator',children=(compositor,controls)),))
+    body=n(L,children=(n(F,children=(n(F,children=(content,)),)),))
+    navigation=n(V,'android:navigationBarBackground');statusbar=n(V,'android:statusBarBackground')
+    root_children=(body,statusbar,navigation)if len(tree[0])==3 else(body,navigation)
+    spec=n(F,children=root_children)
+    def match(e,s,parent_rect=None):
+        klass,rid,desc,click,children,text=s
+        if e.tag!='node' or e.get('package')!=chrome or e.get('class')!=klass or e.get('resource-id','')!=rid or e.get('content-desc','')!=desc or e.get('enabled')!='true' or e.get('clickable')!=click:return False
+        if any(e.get(k)not in[None,'false']for k in ['password','focused','checkable','checked','selected','scrollable'])or any(e.get(k)=='false'for k in ['visible-to-user','displayed']):return False
+        if text is None:
+            if e.get('text')not in[OWNED_CANONICAL_ADDRESS,'https://'+OWNED_CANONICAL_ADDRESS]:return False
+        elif e.get('text','')!=text:return False
+        bounds=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',e.get('bounds',''))
+        if not bounds:return False
+        a,b,c,d=map(int,bounds.groups())
+        if not(0<=a<c<=width and 0<=b<d<=height):return False
+        if parent_rect is not None and not(parent_rect[0]<=a<c<=parent_rect[2]and parent_rect[1]<=b<d<=parent_rect[3]):return False
+        return len(e)==len(children)and all(match(child,expected,(a,b,c,d))for child,expected in zip(e,children))
+    return match(tree[0],spec)
 
 def post_placement_ready_snapshot(version_lines):
     start=time.monotonic();deadline=min(start+30,START+CAP);rows=[];STATE['postPlacementContextReadiness']={'deadlineBootSeconds':deadline-START,'attempts':rows,'inputRetries':0};save()
@@ -989,7 +1023,7 @@ def post_placement_ready_snapshot(version_lines):
             else:known_owned_chrome_without_dialog(xml,png,version_lines);kind='ORIGINAL_FULL_CHROME_CONTEXT_READY'
         except Refused as error:
             if not observed_bodyless_chrome_after_placement(xml,png,version_lines):row.update(status='UNKNOWN_CONTEXT_NO_MORE_READS_OR_INPUT',code=str(error));save();raise
-            row.update(status='EXACT_OBSERVED_BODYLESS_CHROME_READONLY_WAIT',code=str(error));save();continue
+            row.update(status='STRUCTURAL_BODYLESS_CHROME_READONLY_WAIT',code=str(error));save();continue
         row['status']=kind;STATE['postPlacementContextReadiness']['successfulLabel']=label;save()
         return {'label':label,'captureStartMonotonic':began,'captureCompleteMonotonic':complete,'packages':packages},xml,png
     STATE['postPlacementContextReadiness']['status']='EXHAUSTED_NO_HOME_INPUT';save();raise Refused('POST_PLACEMENT_CONTEXT_READINESS_EXHAUSTED')
