@@ -18,7 +18,7 @@ SDK=Path('/usr/local/lib/android/sdk')
 SERIAL='emulator-5554'
 ADB=str(SDK/'platform-tools/adb')
 START=time.monotonic()
-CAP=300
+CAP=360
 CHILDREN=[]
 TRACE=[]
 STATE={'schema':'hosted-android-firstscreen-capability-v1','status':'STARTING','serial':SERIAL,'termsAcceptedByScript':False,'UIInputCommands':0,'PWAVerified':False,'audioMeasured':False,'children':[]}
@@ -113,17 +113,49 @@ def cleanup():
         f.unlink()
     save()
 
-def screen(label):
-    run([ADB,'-s',SERIAL,'shell','uiautomator','dump','/sdcard/ci-firstscreen.xml'],'ui_dump',timeout=25)
-    data,_,truncated=run([ADB,'-s',SERIAL,'exec-out','cat','/sdcard/ci-firstscreen.xml'],'ui_xml',timeout=15,limit=2*1024*1024)
+def screen(label, observation_deadline=None):
+    def screen_timeout(limit):
+        if observation_deadline is None:return limit
+        left=observation_deadline-time.monotonic()
+        if left<=0:raise Refused('CHROME_SCREEN_OBSERVATION_DEADLINE')
+        return min(limit,left)
+    run([ADB,'-s',SERIAL,'shell','uiautomator','dump','/sdcard/ci-firstscreen.xml'],'ui_dump',timeout=screen_timeout(25))
+    data,_,truncated=run([ADB,'-s',SERIAL,'exec-out','cat','/sdcard/ci-firstscreen.xml'],'ui_xml',timeout=screen_timeout(15),limit=2*1024*1024)
     if truncated or b'<!DOCTYPE' in data.upper() or b'<!ENTITY' in data.upper():raise Refused('UI_XML_INVALID')
     try:tree=ET.fromstring(data)
     except ET.ParseError:raise Refused('UI_XML_INVALID')
     (OUT/(label+'.xml')).write_bytes(data)
-    data,_,truncated=run([ADB,'-s',SERIAL,'exec-out','screencap','-p'],'screen_png',timeout=15,limit=8*1024*1024)
+    data,_,truncated=run([ADB,'-s',SERIAL,'exec-out','screencap','-p'],'screen_png',timeout=screen_timeout(15),limit=8*1024*1024)
     if truncated or not data.startswith(b'\x89PNG\r\n\x1a\n'):raise Refused('SCREENSHOT_INVALID')
     (OUT/(label+'.png')).write_bytes(data)
     return {e.get('package') for e in tree.iter() if e.get('package')}
+
+def chrome_meaningful_text(xml):
+    tree=ET.fromstring(xml)
+    return [e for e in tree.iter() if e.get('package')=='com.android.chrome' and (e.get('text','').strip() or e.get('content-desc','').strip())]
+
+def observe_chrome_screen():
+    # Read-only first-run observation; meaningful text requires human review, never consent.
+    deadline=min(time.monotonic()+30,START+CAP);rows=[]
+    STATE['chromeScreenObservations']=rows
+    for attempt in range(1,4):
+        label='chrome-first-screen' if attempt==1 else 'chrome-observation-'+str(attempt)
+        try:packages=screen(label,observation_deadline=deadline)
+        except Refused as error:
+            if str(error) not in ['CHROME_SCREEN_OBSERVATION_DEADLINE','OWN_COMMAND_TIMEOUT_ui_dump','OWN_COMMAND_TIMEOUT_ui_xml','OWN_COMMAND_TIMEOUT_screen_png']:raise
+            rows.append({'attempt':attempt,'status':'INCOMPLETE_BOUNDED_CAPTURE','code':str(error)})
+            STATE['chromeObservationOutcome']='UNKNOWN_AT_OBSERVATION_DEADLINE';return
+        data=(OUT/(label+'.xml')).read_bytes();png=(OUT/(label+'.png')).read_bytes()
+        count=len(chrome_meaningful_text(data))
+        rows.append({'attempt':attempt,'label':label,'elapsedBootSeconds':time.monotonic()-START,'chromeNonemptyTextOrDescriptionCount':count,'xmlSHA256':hashlib.sha256(data).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'packages':sorted(packages)})
+        STATE['chromeFirstScreenPackages']=sorted(packages);save()
+        if count:
+            STATE['chromeObservationOutcome']='MEANINGFUL_CHROME_UI_REQUIRES_REVIEW';return
+        if attempt<3:
+            left=deadline-time.monotonic()
+            if left<=0:break
+            time.sleep(min(8,left))
+    STATE['chromeObservationOutcome']='UNKNOWN_AFTER_BOUNDED_OBSERVATION'
 
 def listener_guard():
     data,_,_=run(['ss','-ltn'],'selected_listeners')
@@ -222,7 +254,7 @@ def main():
         data,_,_=run([ADB,'-s',SERIAL,'shell','pm','list','packages','com.android.chrome'],'chrome_package')
         if b'package:com.android.chrome' not in data:raise Refused('ANDROID_CHROME_NOT_PRESENT')
         run([ADB,'-s',SERIAL,'shell','am','start','-W','-n','com.android.chrome/com.google.android.apps.chrome.Main'],'launch_chrome_firstscreen',timeout=30)
-        STATE['chromeFirstScreenPackages']=sorted(screen('chrome-first-screen'))
+        observe_chrome_screen()
         version,_,cut=run([ADB,'-s',SERIAL,'shell','dumpsys','package','com.android.chrome'],'chrome_version',limit=2*1024*1024)
         lines=[line.strip() for line in version.decode(errors='replace').splitlines() if re.match(r'\s*version(?:Name|Code)=',line)]
         (OUT/'chrome_version.log').write_text('\n'.join(lines)+'\n');STATE['androidChromeVersionLines']=lines
