@@ -130,11 +130,17 @@ import Network
             if target.isHittable { return target }
             guard swipes < maxSwipes else { XCTFail("Actual target remains offscreen: " + name); return nil }
             let frame = target.frame
-            var viewport = app.frame
+            let appFrame = app.frame
+            var viewport = appFrame
+            var measuredSummary: XCUIElement?
+            var measuredSummaryFrame: CGRect?
             if insideDock {
                 let summaries = app.buttons.matching(identifier: "V16 verification controls").allElementsBoundByIndex.filter { $0.exists }
                 guard summaries.count == 1 else { XCTFail("Unique actual dock summary required"); return nil }
-                let top = summaries[0].frame.maxY
+                measuredSummary = summaries[0]
+                let summaryFrame = summaries[0].frame
+                measuredSummaryFrame = summaryFrame
+                let top = summaryFrame.maxY
                 viewport = CGRect(x: viewport.minX, y: top, width: viewport.width, height: viewport.maxY - top)
             }
             let values = [frame.minX, frame.minY, frame.width, frame.height,
@@ -149,7 +155,57 @@ import Network
             else if frame.maxY > viewport.maxY { direction = "up" }
             else { XCTFail("Nonhittable target inside observed viewport; refusing unknown obstruction: " + name); return nil }
             installCheckpoint("Reveal." + direction + ".before")
-            if direction == "up" { app.swipeUp() } else { app.swipeDown() }
+            if insideDock {
+                // A full-app gesture can begin above this fixed panel and scroll the page.
+                // Keep this native drag inside the freshly observed body below its summary.
+                guard let summaryFrame = measuredSummaryFrame,
+                      [appFrame.minX, appFrame.minY, appFrame.width, appFrame.height,
+                       summaryFrame.minX, summaryFrame.minY, summaryFrame.width, summaryFrame.height].allSatisfy({ $0.isFinite }),
+                      appFrame.width > 0, appFrame.height > 0, summaryFrame.width > 0, summaryFrame.height > 0,
+                      summaryFrame.minX >= appFrame.minX, summaryFrame.maxX <= appFrame.maxX,
+                      summaryFrame.minY >= appFrame.minY, summaryFrame.maxY < appFrame.maxY,
+                      viewport.minX >= appFrame.minX, viewport.maxX <= appFrame.maxX,
+                      viewport.minY > appFrame.minY, viewport.maxY <= appFrame.maxY else {
+                    XCTFail("Unknown current app/summary/body geometry before dock gesture: " + name); return nil
+                }
+                let fromY = viewport.minY + viewport.height * (direction == "up" ? 0.7 : 0.3)
+                let toY = viewport.minY + viewport.height * (direction == "up" ? 0.3 : 0.7)
+                let start = app.coordinate(withNormalizedOffset: CGVector(
+                    dx: (viewport.midX - appFrame.minX) / appFrame.width,
+                    dy: (fromY - appFrame.minY) / appFrame.height))
+                let end = app.coordinate(withNormalizedOffset: CGVector(
+                    dx: (viewport.midX - appFrame.minX) / appFrame.width,
+                    dy: (toY - appFrame.minY) / appFrame.height))
+                let from = start.screenPoint, to = end.screenPoint
+                let points = [from.x, from.y, to.x, to.y]
+                guard points.allSatisfy({ $0.isFinite }), from.x == to.x,
+                      from.x > viewport.minX, from.x < viewport.maxX,
+                      from.y > viewport.minY, from.y < viewport.maxY,
+                      to.y > viewport.minY, to.y < viewport.maxY,
+                      direction == "up" ? to.y < from.y : to.y > from.y else {
+                    XCTFail("Native dock gesture must remain inside measured positive body: " + name); return nil
+                }
+                let targetIdentifier = target.identifier, targetLabel = target.label
+                let targetType = target.elementType
+                let summaryIdentifier = measuredSummary?.identifier, summaryLabel = measuredSummary?.label
+                let summaryType = measuredSummary?.elementType
+                attachment("v16-dock-scroll-geometry", "target=\(name); direction=\(direction); app=\(appFrame); body=\(viewport); summary=\(String(describing: measuredSummaryFrame)); from=\(from); to=\(to)")
+                let freshTargets = query.allElementsBoundByIndex.filter { $0.exists }
+                let freshSummaries = app.buttons.matching(identifier: "V16 verification controls").allElementsBoundByIndex.filter { $0.exists }
+                guard freshTargets.count == 1, freshSummaries.count == 1,
+                      app.state == .runningForeground, app.frame == appFrame,
+                      measuredSummary?.exists == true, measuredSummary?.frame == measuredSummaryFrame,
+                      freshSummaries[0].frame == measuredSummaryFrame, freshSummaries[0].isEnabled,
+                      freshSummaries[0].identifier == summaryIdentifier, freshSummaries[0].label == summaryLabel,
+                      freshSummaries[0].elementType == summaryType,
+                      freshTargets[0].isEnabled, freshTargets[0].identifier == targetIdentifier,
+                      freshTargets[0].label == targetLabel, freshTargets[0].elementType == targetType,
+                      freshTargets[0].frame == frame else {
+                    XCTFail("Fresh native dock/target identity or geometry changed before gesture: " + name); return nil
+                }
+                if freshTargets[0].isHittable { return freshTargets[0] }
+                start.press(forDuration: 0.05, thenDragTo: end)
+            } else if direction == "up" { app.swipeUp() } else { app.swipeDown() }
             installCheckpoint("Reveal." + direction + ".after")
             let after = query.allElementsBoundByIndex.filter { $0.exists }
             guard after.count == 1 else { XCTFail("Reveal target changed ownership/uniqueness: " + name); return nil }

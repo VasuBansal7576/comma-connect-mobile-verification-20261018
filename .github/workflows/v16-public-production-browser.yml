@@ -6,6 +6,10 @@ on:
         type: boolean
         default: false
         description: Use existing default Chrome on the public bounded real route; no installs or audio
+      capture_three_error_response_bodies:
+        type: boolean
+        default: false
+        description: Observe original response-stage500bodies for onlythree fixed public classic scripts
 permissions:
   contents: read
 jobs:
@@ -19,7 +23,14 @@ jobs:
           persist-credentials: false
       - name: Existing default Chrome public production proof
         timeout-minutes: 5
-        run: node scripts/v16_production_browser_probe.mjs
+        env:
+          CAPTURE_THREE_RESPONSE_BODIES: ${{ inputs.capture_three_error_response_bodies }}
+        run: |
+          if [ "$CAPTURE_THREE_RESPONSE_BODIES" = true ]; then
+            node scripts/v16_production_browser_probe.mjs --capture-three-error-bodies
+          else
+            node scripts/v16_production_browser_probe.mjs
+          fi
       - name: Preserve original public witness and bounded request diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
