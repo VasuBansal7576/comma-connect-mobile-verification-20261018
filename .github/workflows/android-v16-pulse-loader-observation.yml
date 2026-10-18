@@ -1,0 +1,140 @@
+# Manual diagnostic only. No Chrome/UI/PWA/source/audio-capture acquisition.
+name: Hosted V16 Android private Pulse loader observation
+on:
+  workflow_dispatch:
+    inputs:
+      owner_reviewed_remote_prerequisites:
+        type: boolean
+        default: false
+        description: Reuse only already-accepted stable SDK packages and approved Ubuntu Pulse/ACL dependencies on this ephemeral VM
+      explicit_private_pulse_loader_observation:
+        type: boolean
+        default: false
+        description: One owned headless30s emulator startup with private null-sink debug logs; no Chrome, UI, collector or product/audio pass
+permissions:
+  contents: read
+jobs:
+  private-pulse-loader:
+    if: inputs.explicit_private_pulse_loader_observation && inputs.owner_reviewed_remote_prerequisites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Exact current ownership, diagnostic and approved prerequisite source closure
+        timeout-minutes: 1
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import hashlib
+          expected={'android/boot-proposal/guard.py': 'cbcf76b8548ccaf80cf0a04b2ae751cf2185e0f5d14d5b22a60c481828599001', 'android/boot-proposal/license-probe/probe.py': '931badff8250857d3bcba8beefe912bb58627be55f3eaaecafb988f25c5805bf', 'android/boot-proposal/run-bounded.py': 'a30fdc2bf9e9da3b51be0a9e37c62c3b338ff8b506f237b9c2d67f01213d0660', 'android/boot-proposal/v16/audio_route_gate.py': '470f16165976a0d08f571dc52be3b728a5bf2c23fa452b546a0ea4fdc4bebcb7', 'android/boot-proposal/v16/owned_audio_command.py': '2e2fa46d47de08beedc8751530d935eeff630d9566c7c6bef89075eca8a6a22b', 'android/boot-proposal/v16/boot.py': 'ad7cc88f35dba4320606997c0b70d25914babb7ca133ba41efe4f6e9d3549f97', 'android/boot-proposal/v16/boot_browser_audio.py': 'aa5d28bbbcf62956ddf9803e585badc425478e567aa15bddf8029cbd613db414', 'android/boot-proposal/v16/browser_audio_acquire.py': '1ca9653b8393c0d86c590f01371c1351f03a19c763b9f28647818b6a22b72709', 'android/boot-proposal/v16/linux_subreaper_probe.py': 'e4c5769f6dfa3581cd879d6b7703c62085787397901ee6fee296fa3d5e9a5644', 'android/boot-proposal/v16/native_audio_input.py': '0b679a4904910b4c949ad3d7a7a900bc86f5b5301f281e5e6f268dd40a4b4dcc', 'android/boot-proposal/v16/readonly_browser_audio_bridge_v16.py': 'b3a6fd4fd5dafd6ac323a3b2b0d09e48fa16b3923378098d371b7ab71c9a2e9d', 'android/boot-proposal/v16/unpack_android_browser_carrier.py': 'd21f529a60cbe0246314e87a9e2f57af71a0bf15d8134546f49f3db0b2cf9110', 'android/boot-proposal/verify-installed.py': '2ad6734573e686bb40399558c0681fea71b71543bd798049d33a03919272faa3', 'audio/native-pulse/routing.py': '9f1a25697b1c145dde14419da577b199c59712feadb191e6d671a75bbc482b59', 'android/boot-proposal/v16/probe_private_pulse_loader.py': '08007db6387353b78e0cc1de41a744786f9e65e2c19e7d49c81130086d65a45d'}
+          for relative,digest in expected.items():
+              path=Path(relative)
+              assert path.is_file() and not path.is_symlink() and hashlib.sha256(path.read_bytes()).hexdigest()==digest, 'Exact reviewed prerequisite source required: '+relative
+          PYCODE
+      - name: Actual owned Linux late-descendant adoption and exact-child reap
+        timeout-minutes: 1
+        run: |
+          mkdir -p evidence
+          python3 android/boot-proposal/v16/linux_subreaper_probe.py --owned-linux-capability-probe > evidence/linux-subreaper-probe.json
+      - name: Fresh installed SDK parser evidence only
+        run: python3 android/boot-proposal/license-probe/probe.py
+      - name: Bind exact already-accepted stable channel/revision rows
+        run: python3 android/boot-proposal/guard.py evidence/android-license-parser/receipt.json evidence/android-stable-setup/plan.json
+      - name: Stable SDK installation with EOF, no license acceptance
+        id: sdk_install
+        run: python3 android/boot-proposal/run-bounded.py sdk
+      - name: Check installed revisions and unchanged SDK license files even after installer failure
+        if: always() && steps.sdk_install.outcome != 'skipped'
+        run: python3 android/boot-proposal/verify-installed.py
+      - name: Same failed-run emulator and Android35 image revision provenance
+        timeout-minutes: 1
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import json
+          r=json.loads(Path('evidence/android-stable-setup/post-install.json').read_text())
+          expected=[{'package': 'emulator', 'actualRevision': {'major': 37, 'minor': 2, 'micro': 12, 'preview': 0}, 'licenseRef': 'android-sdk-license'}, {'package': 'system-images;android-35;google_apis_playstore;x86_64', 'actualRevision': {'major': 9, 'minor': 0, 'micro': 0, 'preview': 0}, 'licenseRef': 'android-sdk-license'}]
+          assert r.get('status')=='PASS_INSTALLED_EXACT_STABLE_BINDINGS' and r.get('installed')==expected, 'Original failed-run stable revisions required; no changed-runtime diagnostic inference'
+          assert r.get('licenseFilesBytesAndModesUnchanged') is True and r.get('newTermsAcceptedByScript') is False
+          PYCODE
+      - name: Official Ubuntu prerequisite package index
+        run: python3 android/boot-proposal/run-bounded.py apt-update
+      - name: Same approved Ubuntu Pulse and ACL dependencies
+        run: python3 android/boot-proposal/run-bounded.py apt-install
+      - name: Same original full-run collector build dependencies, without executing collector
+        timeout-minutes: 3
+        run: sudo -n env GITHUB_ACTIONS=true RUNNER_OS=Linux RUNNER_ARCH=X64 python3 android/boot-proposal/v16/owned_audio_command.py --install-deps-root
+      - name: Exact new syscall diagnostic dependency with bound root subreaper cleanup
+        timeout-minutes: 2
+        run: sudo -n env GITHUB_ACTIONS=true RUNNER_OS=Linux RUNNER_ARCH=X64 python3 android/boot-proposal/v16/probe_private_pulse_loader.py --install-trace-deps-root
+      - name: Explicit no-UI private Pulse loader and UNIX connect observation only
+        id: probe
+        timeout-minutes: 5
+        run: |
+          python3 android/boot-proposal/v16/probe_private_pulse_loader.py --explicit-private-pulse-loader-observation
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import json
+          r=json.loads(Path('evidence/android-pulse-loader/receipt.json').read_text())
+          assert r.get('schema')=='owned-private-pulse-emulator-loader-diagnostic-v1' and r.get('status')=='DIAGNOSTIC_ACQUIRED_NOT_AUDIO_ACCEPTANCE'
+          assert r.get('acquisitionMode')=='LOADER_ONLY_NO_BROWSER' and r.get('UIInputCommands')==0 and r.get('audioMeasured') is False and r.get('PWAVerified') is False and r.get('functionalPassClaimed') is False
+          assert r.get('diagnosticWindowSeconds')==30 and r.get('ownedChildCleanupVerified') is True and r.get('KVMACLChanged') is False and r.get('diagnosticRawTraceRemoved') is True and r.get('loaderObservation',{}).get('status')=='FILTERED_ORIGINAL_SYSCALL_ROWS'
+          PYCODE
+      - name: Always verify only bound diagnostic-owned process and KVM cleanup
+        if: always() && steps.probe.outcome != 'skipped'
+        timeout-minutes: 1
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import json,sys
+          sys.path.insert(0,'android/boot-proposal/v16')
+          import probe_private_pulse_loader as diagnostic
+          diagnostic.dependencies(Path.cwd())
+          import boot_browser_audio as owner
+          out=Path('evidence/android-pulse-loader'); receipt=out/'receipt.json'
+          assert out.is_dir() and not out.is_symlink() and receipt.is_file() and not receipt.is_symlink() and receipt.stat().st_size<=4194304, 'Original diagnostic ownership receipt required'
+          value=json.loads(receipt.read_text())
+          assert value.get('schema')=='owned-private-pulse-emulator-loader-diagnostic-v1' and value.get('acquisitionMode')=='LOADER_ONLY_NO_BROWSER' and value.get('UIInputCommands')==0, 'Exact no-UI diagnostic receipt required'
+          owner.OUT=out; owner.STATE=value; owner.TRACE=value.get('trace',[])
+          owner.cleanup()
+          r=json.loads(receipt.read_text())
+          assert r.get('ownedChildCleanupVerified') is True and r.get('KVMACLChanged') is not True, 'Bound owned-process/group and KVM cleanup unverified'
+          assert not r.get('ownedADBServerStarted') or r.get('ownedADBServerCleanupExitCode')==0, 'Owned ADB cleanup unverified'
+          PYCODE
+      - name: Retain original prerequisite receipts and sanitized diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-v16-private-pulse-loader-${{ github.run_id }}
+          path: |
+            evidence/linux-subreaper-probe.json
+            evidence/android-license-parser/receipt.json
+            evidence/android-license-parser/sdk-result.json
+            evidence/android-license-parser/*-diagnostic.txt
+            evidence/android-stable-setup/plan.json
+            evidence/android-stable-setup/post-install.json
+            evidence/android-boot/sdk.log
+            evidence/android-boot/apt-update.log
+            evidence/android-boot/apt-install.log
+            evidence/android-audio-deps/*.json
+            evidence/android-audio-deps/install.log
+            evidence/android-audio-deps/owned-install/*.json
+            evidence/android-loader-deps/*.json
+            evidence/android-loader-deps/install.log
+            evidence/android-loader-deps/owned-install/*.json
+            evidence/android-pulse-loader/*.json
+            evidence/android-pulse-loader/*-startup-first.log
+            evidence/android-pulse-loader/*-startup-last.log
+            evidence/android-pulse-loader/emulator_help.log
+            evidence/android-pulse-loader/pulse_help.log
+            evidence/android-pulse-loader/strace_help.log
+            evidence/android-pulse-loader/strace_version.log
+            evidence/android-pulse-loader/readelf_version.log
+            evidence/android-pulse-loader/loader_packages.log
+            evidence/android-pulse-loader/loader-elf-*.log
+            evidence/android-pulse-loader/emulator.log
+            evidence/android-pulse-loader/pulse.log
+          retention-days: 3
+          if-no-files-found: error
