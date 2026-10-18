@@ -196,17 +196,27 @@ def main():
         run([ADB,'start-server'],'start_owned_adb_server');STATE['ownedADBServerStarted']=True;save()
         devices,_,_=run([ADB,'devices'],'adb_devices_before')
         if any(line.strip() for line in devices.decode().splitlines()[1:]):raise Refused('EXISTING_ADB_DEVICE_REFUSED')
-        name='ci_firstscreen_'+str(os.getpid());STATE['ownedAVD']=name;save()
+        name='ci_firstscreen_'+str(os.getpid());STATE['ownedAVD']=name
+        # Bind avdmanager and emulator to the same explicit private discovery root.
+        # Hosted tools otherwise disagreed about the implicit Android home.
+        avd_home=Path(tempfile.mkdtemp(prefix='v15avd-',dir='/tmp'));avd_home.chmod(0o700)
+        env['ANDROID_AVD_HOME']=str(avd_home);STATE['ownedAVDHome']=str(avd_home);save()
         device_list,_,_=run([str(SDK/'cmdline-tools/latest/bin/avdmanager'),'list','device'],'actual_device_profiles')
         if not re.search(r'id:\s*\d+\s+or\s+"pixel_6"',device_list.decode(errors='replace')):raise Refused('EXPECTED_DEVICE_PROFILE_NOT_IN_ACTUAL_LIST')
-        run([str(SDK/'cmdline-tools/latest/bin/avdmanager'),'create','avd','--name',name,'--package','system-images;android-35;google_apis_playstore;x86_64','--device','pixel_6'],'create_owned_avd',timeout=30)
+        run([str(SDK/'cmdline-tools/latest/bin/avdmanager'),'create','avd','--name',name,'--package','system-images;android-35;google_apis_playstore;x86_64','--device','pixel_6'],'create_owned_avd',timeout=30,env=env)
+        if not(avd_home/(name+'.ini')).is_file():raise Refused('CREATED_AVD_DISCOVERY_INI_MISSING')
+        listed,_,_=run([str(SDK/'emulator/emulator'),'-list-avds'],'owned_avd_list',env=env)
+        if listed.decode().splitlines()!=[name]:raise Refused('CREATED_AVD_NOT_UNIQUELY_DISCOVERABLE')
         command=[str(SDK/'emulator/emulator'),'-avd',name,'-no-window','-no-snapshot','-accel','on','-camera-back','none','-camera-front','none','-port','5554',audio_flag]
         emu=own_process(command,'emulator',env=env);deadline=time.monotonic()+180
         while time.monotonic()<deadline and emu.poll() is None:
             data,code,_=run([ADB,'-s',SERIAL,'shell','getprop','sys.boot_completed'],'boot_poll',timeout=5,allowed_failure=True)
             if code==0 and data.strip()==b'1':break
             time.sleep(1)
-        else:raise Refused('BOOT_NOT_COMPLETE_WITHIN_180S')
+        else:
+            if emu.poll() is not None:
+                STATE['emulatorEarlyExitCode']=emu.returncode;save();raise Refused('EMULATOR_EXITED_BEFORE_BOOT')
+            raise Refused('BOOT_NOT_COMPLETE_WITHIN_180S')
         listener_guard();packages=screen('android-first-screen');STATE['androidFirstScreenPackages']=sorted(packages)
         if not firstscreen_can_launch_chrome(packages):STATE['status']='STOP_ANDROID_FIRST_RUN_OR_NONLAUNCHER_UI_REQUIRES_REVIEW';return 0
         data,_,_=run([ADB,'-s',SERIAL,'shell','pm','list','packages','com.android.chrome'],'chrome_package')
