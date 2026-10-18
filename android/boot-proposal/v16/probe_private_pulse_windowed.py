@@ -207,8 +207,9 @@ def start_private_xvfb(b,private,env):
  b.STATE['graphicalEnvironmentChildOnlyOverride']={'DISPLAYWasPresent':bool(env.get('DISPLAY')),'XAUTHORITYWasPresent':bool(env.get('XAUTHORITY')),'originalProcessEnvironmentUnchanged':True}
  number=200+os.getpid()%1000;refuse_existing_display(number)
  b.STATE['privateDisplayReservation']={'number':number,'preexistingPathsAndUNIXAndTCPAbsent':True};b.save()
- raw,_,cut=b.run(['Xvfb','-help'],'xvfb_help',timeout=5,limit=65536);trace=b.STATE['trace'][-1];need(not cut and trace['stdoutBytes']+trace['stderrBytes']<=65536,'FULL_ACTUAL_XVFB_HELP_REQUIRED');text=(b.OUT/'xvfb_help.log').read_text()
- need(all(x in text for x in ['-screen','-auth','-nolisten','-noreset']),'ACTUAL_DOCUMENTED_PRIVATE_XVFB_OPTIONS_REQUIRED')
+ raw,_,cut=b.run(['/bin/sh','-c','exec Xvfb -help 2>&1'],'xvfb_help',timeout=5,limit=65536);trace=b.STATE['trace'][-1];need(not cut and trace['stdoutBytes']+trace['stderrBytes']<=65536,'FULL_ACTUAL_XVFB_HELP_REQUIRED');text=raw.decode()
+ options={x:x in text for x in ['-screen','-auth','-nolisten','-noreset']};b.STATE['privateDisplayHelpOptions']=options;b.save()
+ need(all(options.values()),'ACTUAL_DOCUMENTED_PRIVATE_XVFB_OPTIONS_REQUIRED')
  auth=private/'Xauthority';script=private/'xauth-source.private';fd=os.open(script,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
  with os.fdopen(fd,'w')as stream:stream.write('add :'+str(number)+' MIT-MAGIC-COOKIE-1 '+os.urandom(16).hex()+'\n')
  try:b.run(['xauth','-q','-f',str(auth),'source',str(script)],'configure_private_xauth',timeout=5)
