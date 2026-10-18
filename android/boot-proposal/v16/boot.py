@@ -956,6 +956,44 @@ def verified_post_install_readiness(version_lines):
         known_owned_chrome_without_dialog(xml,png,version_lines);return kind
     raise Refused('UNKNOWN_POST_INSTALL_READINESS_NO_HOME_INPUT')
 
+
+def observed_bodyless_chrome_after_placement(xml,png,version_lines):
+    # Exact actual39122783965 native-only state: permits a readonly retry, NEVER input.
+    if {line.removeprefix('versionName=')for line in version_lines if line.startswith('versionName=')}!={'124.0.6367.219'}:return False
+    if len(xml)>2*1024*1024 or b'<!DOCTYPE'in xml.upper()or b'<!ENTITY'in xml.upper():return False
+    if len(png)<24 or png[:8]!=b'\x89PNG\r\n\x1a\n'or png[12:16]!=b'IHDR'or [int.from_bytes(png[16:20],'big'),int.from_bytes(png[20:24],'big')]!=[1080,2400]:return False
+    try:tree=ET.fromstring(xml)
+    except ET.ParseError:return False
+    def shape(e):return [e.tag,dict(e.attrib),[shape(c)for c in e]]
+    canonical=json.dumps(shape(tree),sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
+    return hashlib.sha256(canonical).hexdigest()=='4b1420738880857e758ea6db1c695e10f7dba46e2bca78529ac207c37224715d'
+
+def post_placement_ready_snapshot(version_lines):
+    start=time.monotonic();deadline=min(start+30,START+CAP);rows=[];STATE['postPlacementContextReadiness']={'deadlineBootSeconds':deadline-START,'attempts':rows,'inputRetries':0};save()
+    transient={'UI_DUMP_REPORTED_ERROR','UI_DUMP_SUCCESS_MARKER_REQUIRED','UI_XML_INVALID','OWN_COMMAND_FAILED_ui_dump','OWN_COMMAND_FAILED_ui_xml','OWN_COMMAND_TIMEOUT_ui_dump','OWN_COMMAND_TIMEOUT_ui_xml','OWN_COMMAND_TIMEOUT_screen_png','CHROME_SCREEN_OBSERVATION_DEADLINE'}
+    for attempt in range(1,4):
+        began=time.monotonic()
+        if began>=deadline:break
+        label='owned-v16-after-owned-placement-input-attempt-'+str(attempt);row={'attempt':attempt,'label':label,'captureStartBootSeconds':began-START};rows.append(row);save()
+        try:packages=screen(label,observation_deadline=deadline)
+        except Refused as error:
+            if str(error)not in transient:raise
+            row.update(status='FRESH_XML_UNAVAILABLE',code=str(error));save();continue
+        complete=time.monotonic()
+        if complete<began or complete>=deadline:row['status']='READINESS_DEADLINE_CROSSED';save();raise Refused('POST_PLACEMENT_READINESS_DEADLINE')
+        row.update(captureCompleteBootSeconds=complete-START,ageAtCompletionSeconds=complete-began)
+        if complete-began>10:row['status']='FRESH_BUT_AGED_OUT_NO_INPUT';save();continue
+        xml=(OUT/(label+'.xml')).read_bytes();png=(OUT/(label+'.png')).read_bytes();row.update(xmlSHA256=hashlib.sha256(xml).hexdigest(),pngSHA256=hashlib.sha256(png).hexdigest())
+        try:
+            if observed_home_workspace(xml):launcher_workspace_context(xml,png);kind='ORIGINAL_KNOWN_HOME_READY'
+            else:known_owned_chrome_without_dialog(xml,png,version_lines);kind='ORIGINAL_FULL_CHROME_CONTEXT_READY'
+        except Refused as error:
+            if not observed_bodyless_chrome_after_placement(xml,png,version_lines):row.update(status='UNKNOWN_CONTEXT_NO_MORE_READS_OR_INPUT',code=str(error));save();raise
+            row.update(status='EXACT_OBSERVED_BODYLESS_CHROME_READONLY_WAIT',code=str(error));save();continue
+        row['status']=kind;STATE['postPlacementContextReadiness']['successfulLabel']=label;save()
+        return {'label':label,'captureStartMonotonic':began,'captureCompleteMonotonic':complete,'packages':packages},xml,png
+    STATE['postPlacementContextReadiness']['status']='EXHAUSTED_NO_HOME_INPUT';save();raise Refused('POST_PLACEMENT_CONTEXT_READINESS_EXHAUSTED')
+
 def launch_observed_owned_pwa(version_lines):
     if STATE.get('UIInputCommands')!=7 or not STATE.get('ownedFinalInstallInput',{}).get('tapCommandCompleted'):raise Refused('CURRENT_OWN_FINAL_INSTALL_REQUIRED')
     verified_final_install_context(version_lines);readiness_kind=verified_post_install_readiness(version_lines)
@@ -965,7 +1003,7 @@ def launch_observed_owned_pwa(version_lines):
         target=nexus_placement_target(xml,png,version_lines);age=input_age(fresh)
         placement={'inputSnapshotLabel':fresh['label'],'snapshotAgeUpperBoundSeconds':age,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'target':target,'attempts':1,'inputOrdinalBefore':7,'inputOrdinal':8,'tapCommandCompleted':False,'finalInstallSnapshotLabel':STATE['ownedFinalInstallInput']['inputSnapshotLabel']};STATE['ownedPWAPlacementInput']=placement;STATE['UIInputCommands']+=1;save();input_age(fresh)
         run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_owned_pwa_placement',timeout=5)
-        placement['tapCommandCompleted']=True;save();fresh,xml,png=retained_fresh_input('owned-v16-after-owned-placement')
+        placement['tapCommandCompleted']=True;save();fresh,xml,png=post_placement_ready_snapshot(version_lines)
         if observed_home_workspace(xml):
             launcher_workspace_context(xml,png);age=input_age(fresh)
             STATE['ownedHomeAfterInstallInput']={'kind':'OBSERVED_HOME_AFTER_PLACEMENT_NO_KEY','transitionCompleted':True,'inputSnapshotLabel':fresh['label'],'snapshotAgeUpperBoundSeconds':age,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'keyCode':None,'tapCommandCompleted':False,'completedInputOrdinal':STATE['UIInputCommands']};save()
