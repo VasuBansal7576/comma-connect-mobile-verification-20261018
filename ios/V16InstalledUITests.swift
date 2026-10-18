@@ -174,8 +174,41 @@ import Network
     private func ensureQuickControls(in app: XCUIApplication) {
         _ = text(".*V16.*e7ab13f79d01.*", in: app, timeout: 30)
         let pin = app.buttons.matching(identifier: "Pin actual playlist")
-        if !pin.firstMatch.exists { nativeSummaryTap("V16 verification controls", in: app) }
-        XCTAssertTrue(pin.firstMatch.waitForExistence(timeout: 8))
+        let evidence = app.buttons.matching(identifier: "Evidence export")
+        func mainHasChild() -> Bool {
+            pin.firstMatch.exists || evidence.firstMatch.exists
+                || app.otherElements.matching(identifier: "Evidence export").firstMatch.exists
+        }
+        func retainState(_ stage: String, _ facts: [String: Any]) {
+            let data = (try? JSONSerialization.data(withJSONObject: facts, options: [.sortedKeys])) ?? Data()
+            attachment("v16-main-expansion-" + stage, String(decoding: data, as: UTF8.self))
+        }
+        let initiallyOpen = mainHasChild()
+        if !initiallyOpen {
+            let before = app.buttons.matching(identifier: "V16 verification controls")
+            let count = before.count
+            let value = count == 1 ? before.element.value as? String : nil
+            retainState("before", ["knownChildPresent": false, "summaryCount": count,
+                "summaryValue": value.map { String($0.prefix(256)) as Any } ?? NSNull()])
+            nativeSummaryTap("V16 verification controls", in: app)
+        }
+        var ready = pin.firstMatch.waitForExistence(timeout: 8)
+        // Retained 39120973750 AX proves this exact collapsed summary value. Pin absence
+        // alone never licenses another toggle: an open-but-late/offscreen child must remain open.
+        if !ready && !initiallyOpen && !mainHasChild() {
+            let summary = app.buttons.matching(identifier: "V16 verification controls")
+            if summary.count == 1, summary.element.exists,
+               let value = summary.element.value as? String, value.hasPrefix("▸") {
+                retainState("after-primary-before-single-retry", ["knownChildPresent": false,
+                    "pinReady": false, "summaryCount": 1, "summaryValue": String(value.prefix(256)),
+                    "reason": "Actual U+25B8 collapsed value; one additional native tap only."])
+                nativeSummaryTap("V16 verification controls", in: app)
+                ready = pin.firstMatch.waitForExistence(timeout: 8)
+            }
+        }
+        retainState("complete", ["pinReady": ready, "initiallyOpen": initiallyOpen,
+            "scope": "Observed child/disclosure navigation only; no media/source/phase mutation."])
+        XCTAssertTrue(ready, "Actual Pin child required after bounded observed main expansion")
         _ = nativeReveal(pin, name: "Pin actual playlist", in: app, insideDock: true)
     }
 
