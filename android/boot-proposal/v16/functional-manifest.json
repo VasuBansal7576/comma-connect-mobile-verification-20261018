@@ -1,21 +1,21 @@
 {
   "schema": "v16-owned-android-functional-input-set-v1",
-  "defaultBootUnchangedSHA256": "073e11ffa9501d8941f47346a8b443c29f0fd467e48152674e9abde5597f0be8",
+  "defaultBootUnchangedSHA256": "8eb00e42c289e69181030925c3312b2a6461750c52025e61640ea797b4efb2a3",
   "runtimeFiles": {
     "boot.py": {
-      "sha256": "073e11ffa9501d8941f47346a8b443c29f0fd467e48152674e9abde5597f0be8",
+      "sha256": "8eb00e42c289e69181030925c3312b2a6461750c52025e61640ea797b4efb2a3",
       "bytes": 117119
     },
     "readonly_bridge_v16.py": {
-      "sha256": "f343359c26b4055e32b37dab3997e8666c6fea17d70fd575065b74445eadb018",
-      "bytes": 9728
+      "sha256": "b82f1cc19465fa492d596b97a89a8e0ed27c485789116f410521e4766ca8144e",
+      "bytes": 10026
     },
     "read_dom_v16.mjs": {
       "sha256": "5255f8463ee01cac5f6a63f3598e0045c2514b53373b5131694cf710d09ca06a",
       "bytes": 2889
     },
     "derive_functional_boot.py": {
-      "sha256": "c648b560342a7f46a7650ae8374e401aed916cb88456af17c19249ddef71bc48",
+      "sha256": "028abaf2c4ef7abb66ed6eae04ec5cb3136cd6aa0526390f22957601711ac998",
       "bytes": 3076
     },
     "functional_acquire.py": {
@@ -31,15 +31,15 @@
       "bytes": 7787
     },
     "readonly_functional_bridge.py": {
-      "sha256": "14e2bf140cbfe03709003ed9dc226b8afd8dd69c0ddb03d695aeb23b8a507f7a",
-      "bytes": 11122
+      "sha256": "3b3f9478ea015854806707381fdf2722b042e1b03f8999766e85d8fbcb591ce8",
+      "bytes": 11420
     },
     "read_functional_state.mjs": {
       "sha256": "681aea46fb443b2e1cdc57a4e41f6a0aef4190b395b1e674a8b33bf9b92b44d3",
       "bytes": 3059
     }
   },
-  "derivedSourceSHA256": "9b83a03c415f6e00d4dd3ab1c39025f62c9f65a3b6ddebea19cdc68f663cb07f",
+  "derivedSourceSHA256": "362e2f038635d6c18f16b0a76e3744c29c4271b9bd43152378ff5cfd3e6cbf62",
   "derivedSourceBytes": 118663,
   "entrypoints": [
     "url",

@@ -39,7 +39,8 @@ def discover_socket(data):
 def parse_forwards(data):
     if not isinstance(data,bytes) or len(data)>65536:raise Refused('BOUNDED_FORWARD_LIST_REQUIRED')
     rows=[]
-    for line in data.decode('ascii').splitlines():
+    for line in data.decode('ascii').replace('\r','\n').split('\n'):
+        if not line.strip(' \t\r\n\v\f'):continue
         fields=line.split()
         if len(fields)!=3:raise Refused('FORWARD_LIST_SCHEMA_UNKNOWN')
         rows.append(tuple(fields))
@@ -98,17 +99,22 @@ def observe_owned_pwa(adb,http_get,evaluate,output,*,owned_vm_guard,require_carr
     if output.exists():raise Refused('FRESH_OUTPUT_REQUIRED')
     output.mkdir(parents=True,mode=0o700)
     started=time.monotonic();receipt={'status':'STARTING','PWAVerified':False,'audioMeasured':False,'inputCommands':0,'sourceWrites':0,'cleanupVerified':False};port=None;mapping=None;allocation_attempted=False
+    def forward_list():
+        data=adb(['forward','--list'])
+        if isinstance(data,bytes) and len(data)<=65536:
+            receipt.setdefault('forwardListReads',[]).append({'bytes':len(data),'asciiWhitespaceOnly':not data.strip(b' \t\r\n\v\f')})
+        return data
     def bound():
         if time.monotonic()-started>=45:raise Refused('READONLY_BRIDGE_DEADLINE')
     try:
         devices=adb(['devices']).decode('ascii').splitlines()
         if [line.split() for line in devices[1:] if line.strip()]!=[[SERIAL,'device']]:raise Refused('EXACT_SINGLE_OWNED_SERIAL_REQUIRED')
         bound();socket=discover_socket(adb(['-s',SERIAL,'shell','cat','/proc/net/unix']));receipt['socket']=socket
-        prior=parse_forwards(adb(['forward','--list']))
+        prior=parse_forwards(forward_list())
         if any(r[0]==SERIAL and r[2]=='localabstract:'+SOCKET for r in prior):raise Refused('PREEXISTING_SAME_SOCKET_FORWARD_REFUSED')
         bound();allocation_attempted=True;raw=adb(['-s',SERIAL,'forward','tcp:0','localabstract:'+SOCKET]).strip()
         if not re.fullmatch(rb'[1-9]\d{0,4}',raw) or not 1024<=int(raw)<=65535:raise Refused('ALLOCATED_FORWARD_PORT_REQUIRED')
-        port=int(raw);mapping=verify_forward(adb(['forward','--list']),port);receipt['forward']={'serial':SERIAL,'port':port,'remote':mapping[2]}
+        port=int(raw);mapping=verify_forward(forward_list(),port);receipt['forward']={'serial':SERIAL,'port':port,'remote':mapping[2]}
         bound();version=decode_json(http_get(port,'/json/version'),65536);targets=decode_json(http_get(port,'/json/list'),1024*1024)
         if isinstance(version,dict):receipt['chromeVersionObserved']={k:version[k] for k in ['Browser','Android-Package','Protocol-Version'] if isinstance(version.get(k),str) and len(version[k])<=128}
         if isinstance(targets,list):receipt['targetSummaryObserved']=[{'type':t.get('type'),'isExactOwnedURL':t.get('url')==URL} for t in targets[:128] if isinstance(t,dict)]
@@ -127,9 +133,9 @@ def observe_owned_pwa(adb,http_get,evaluate,output,*,owned_vm_guard,require_carr
     finally:
         if port is not None:
             try:
-                verify_forward(adb(['forward','--list']),port)
+                verify_forward(forward_list(),port)
                 adb(['-s',SERIAL,'forward','--remove','tcp:'+str(port)])
-                receipt['cleanupVerified']=not any(r[1]=='tcp:'+str(port) for r in parse_forwards(adb(['forward','--list'])))
+                receipt['cleanupVerified']=not any(r[1]=='tcp:'+str(port) for r in parse_forwards(forward_list()))
             except Exception:receipt['cleanupCode']='OWN_FORWARD_CLEANUP_UNVERIFIED'
         else:
             receipt['cleanupVerified']=not allocation_attempted
