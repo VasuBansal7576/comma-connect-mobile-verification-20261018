@@ -9,9 +9,9 @@ if os.environ.get('GITHUB_ACTIONS') != 'true':
     raise SystemExit('Hosted CI only')
 root = Path(__file__).resolve().parents[1]
 inputs = [
-    ('ios/V16InstalledUITests.swift', '19d38ed355f53d5442f4f4fcc2edeb72e8c8a4643eff625f9480ae752736b92d'),
-    ('ios/V16NativeContinuation.swift.inc', '3d82748cd12d5bb3144bff934bf24d6a2ae479df89285bd269e546b97349e6f4'),
-    ('ios/V16URLContinuation.swift.inc', '78aa6a6216964b984005d8330bf2e2426588c61da111ccd256c6c6abd1672b5a'),
+    ('ios/V16InstalledUITests.swift', '4a7ed940e3877599a3f1973b50d775692316f0961108590108d12494ecdab8dc'),
+    ('ios/V16NativeContinuation.swift.inc', '811e8ca422d2f432bff00f10b59ea9c5e4f812a5c667fa39de9848115bd0cbe0'),
+    ('ios/V16URLContinuation.swift.inc', '8258fd00bdf89efac4eac8301bdaf5f7c9fdac0da1f54fc04e8e836185c06435'),
 ]
 parts = []
 for name, expected in inputs:

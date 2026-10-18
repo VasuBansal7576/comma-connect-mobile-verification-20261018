@@ -698,13 +698,19 @@ import Network
         XCTAssertTrue(host.wait(for: .runningForeground, timeout: 8), "Audio link left actual installed WebClip")
     }
 
+    private func audioEnsureStatusOpen() {
+        let status = host.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "playlist="))
+        nativeEnsureDisclosureOpen("V16 OS audio test", in: host,
+            childExists: { status.count == 1 && status.element.exists })
+    }
+
     func testV16InstalledAudioProtocol() throws {
         launchHomeIcon(requireAudioControls: false)
         try audioFreshEntryFromCurrentMenu()
         ensureQuickControls(in: host)
         uniqueTap("Pin actual playlist", in: host)
         // Reveal the existing original status; no helper/source changes. Fail if summary AX differs.
-        nativeSummaryTap("V16 OS audio test", in: host)
+        audioEnsureStatusOpen()
         let pinAX = text("playlist=PINNED assets=6 .*", in: host, timeout: 20).label
         try audioRevealAndTap("Prepare playback")
         let preparedAX = text("READY: native playing and unmuted\\..*", in: host, timeout: 12).label
@@ -726,7 +732,7 @@ import Network
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 48), .completed, "Actual Close not observed")
         screen("v16-after-actual-product-close")
         try audioRevealAndTap("Start bare native")
-        nativeSummaryTap("V16 OS audio test", in: host)
+        audioEnsureStatusOpen()
         _ = text("playlist=PINNED assets=6 bare-native source=LIVE .*", in: host, timeout: 8)
         let cleanupAX = text("playlist=PINNED assets=6 bare-native source=stopped .*cleanup=true", in: host, timeout: 25).label
         screen("v16-source-cleanup")
@@ -739,7 +745,7 @@ import Network
         _ = text("Frozen [0-9]+ UTF-8 bytes;.*", in: host, timeout: 15)
         revealQuickResult("Pack frozen witness", in: host)
         uniqueTap("Pack frozen witness", in: host)
-        revealEvidenceMenu()
+        openEvidenceExport()
         let packedStatus = text("Packed [0-9]+ UTF-8 carrier bytes; SHA-256 [0-9a-f]{64};.*", in: host, timeout: 20).label
         attachment("v16-packed-status", packedStatus)
         // Never query/debugDescription after large Freeze. Read one actual AX label and verify it.

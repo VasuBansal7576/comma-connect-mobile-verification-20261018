@@ -30,9 +30,44 @@ extension V16InstalledUITests {
         nativeEnsureMainOpen(in: host)
     }
 
+    private func urlEvidenceCloseNeeded(count: Int, value: String?, menuCount: Int) -> Bool? {
+        if count == 1 && value?.hasPrefix("▸") == true && menuCount == 0 { return false }
+        if count == 1 && value?.hasPrefix("▾") == true && menuCount == 1 { return true }
+        return nil
+    }
+
+    private func urlEvidenceState() -> (count: Int, value: String?, menuCount: Int) {
+        let buttons = host.buttons.matching(identifier: "Evidence export")
+        let query = buttons.firstMatch.exists ? buttons : host.otherElements.matching(identifier: "Evidence export")
+        let summaries = query.allElementsBoundByIndex.filter { $0.exists }
+        let menuCount = host.links.matching(NSPredicate(format: "label == %@", "Menu")).allElementsBoundByIndex.filter { $0.exists }.count
+        return (summaries.count, summaries.first?.value as? String, menuCount)
+    }
+
+    private func urlEnsureEvidenceCollapsed() {
+        let before = urlEvidenceState()
+        guard let closeNeeded = urlEvidenceCloseNeeded(count: before.count, value: before.value, menuCount: before.menuCount) else {
+            XCTFail("Unknown/ambiguous native Evidence state before compact Freeze"); return
+        }
+        if closeNeeded {
+            nativeSummaryTap("Evidence export", in: host)
+            let collapsed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                let current = self.urlEvidenceState()
+                return self.urlEvidenceCloseNeeded(count: current.count, value: current.value, menuCount: current.menuCount) == false
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [collapsed], timeout: 5), .completed,
+                           "Original Evidence collapse must remove Menu and expose collapsed native marker")
+        }
+        let after = urlEvidenceState()
+        attachment("v16-url-evidence-collapse", "beforeCount=\(before.count); beforeValue=\(String(describing: before.value)); beforeMenu=\(before.menuCount); originalCollapseTaps=\(closeNeeded ? 1 : 0); afterCount=\(after.count); afterValue=\(String(describing: after.value)); afterMenu=\(after.menuCount)")
+        XCTAssertEqual(urlEvidenceCloseNeeded(count: after.count, value: after.value, menuCount: after.menuCount), false,
+                       "Evidence must be observably collapsed before original compact Freeze/Pack")
+    }
+
     private func urlEvidencePanel() {
+        closeDeclaredNavigationIfOpen()
         urlDockOpen()
-        openEvidenceExport()
+        urlEnsureEvidenceCollapsed()
         revealQuickResult("Freeze", in: host)
         XCTAssertTrue(host.buttons["Freeze"].isHittable, "Actual current Freeze must be AX-accessible")
     }
@@ -57,7 +92,7 @@ extension V16InstalledUITests {
         let frozen = text("Frozen [0-9]+ UTF-8 bytes;.*", in: host, timeout: 15).label
         revealQuickResult("Pack frozen witness", in: host)
         uniqueTap("Pack frozen witness", in: host)
-        revealEvidenceMenu()
+        openEvidenceExport()
         let packets = host.staticTexts.matching(NSPredicate(
             format: "label BEGINSWITH %@", "{\"format\":\"v13-gzip-export-carrier-v1\""
         ))

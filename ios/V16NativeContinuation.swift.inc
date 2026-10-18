@@ -264,7 +264,6 @@ extension V16InstalledUITests {
         let frozen = text("Frozen [0-9]+ UTF-8 bytes;.*", in: host, timeout: 15).label
         revealQuickResult("Pack frozen witness", in: host)
         uniqueTap("Pack frozen witness", in: host)
-        revealEvidenceMenu()
         let status = text("Packed [0-9]+ UTF-8 carrier bytes; SHA-256 [0-9a-f]{64};.*", in: host, timeout: 20).label
         let q = host.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "{\"format\":\"v13-gzip-export-carrier-v1\""))
         XCTAssertTrue(q.firstMatch.waitForExistence(timeout: 8))
