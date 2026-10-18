@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Owned ephemeral CI boot/Chrome first-screen witness. No UI taps or consent continuation."""
+"""Owned ephemeral CI Chrome witness. One fresh launcher-icon tap, no consent continuation."""
 import hashlib
 import json
 import os
@@ -33,7 +33,7 @@ def remaining(limit):
     if value<=0:raise Refused('BOOT_PHASE_DEADLINE')
     return value
 
-def run(args,label,timeout=20,limit=65536,allowed_failure=False,env=None):
+def run(args,label,timeout=20,limit=65536,allowed_failure=False,env=None,retain_stdout=True):
     timeout=remaining(timeout)
     p=subprocess.Popen(args,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True,env=env)
     buffers=[bytearray(),bytearray()];counts=[0,0]
@@ -52,7 +52,7 @@ def run(args,label,timeout=20,limit=65536,allowed_failure=False,env=None):
         for t in threads:t.join(timeout=2)
     stdout,stderr=map(bytes,buffers)
     # No process environment, arbitrary command lines or possible token-bearing emulator output is retained.
-    diagnostic=(stdout if label not in ['screen_png','ui_xml'] else b'')+stderr
+    diagnostic=(stdout if retain_stdout and label not in ['screen_png','ui_xml'] else b'')+stderr
     text=diagnostic[-65536:].decode('utf-8',errors='replace')
     text='\n'.join('[TOKEN_LINE_REDACTED]' if re.search(r'token|authorization|password|cookie',line,re.I) else line for line in text.splitlines())
     (OUT/(label+'.log')).write_text(text)
@@ -136,9 +136,11 @@ def chrome_meaningful_text(xml):
 
 def observe_chrome_screen():
     # Read-only first-run observation; meaningful text requires human review, never consent.
-    deadline=min(time.monotonic()+30,START+CAP);rows=[]
+    observation_start=time.monotonic();deadline=min(observation_start+90,START+CAP);rows=[]
     STATE['chromeScreenObservations']=rows
     for attempt in range(1,4):
+        delay=observation_start+(attempt-1)*20-time.monotonic()
+        if delay>0:time.sleep(min(delay,max(0,deadline-time.monotonic())))
         label='chrome-first-screen' if attempt==1 else 'chrome-observation-'+str(attempt)
         try:packages=screen(label,observation_deadline=deadline)
         except Refused as error:
@@ -151,11 +153,56 @@ def observe_chrome_screen():
         STATE['chromeFirstScreenPackages']=sorted(packages);save()
         if count:
             STATE['chromeObservationOutcome']='MEANINGFUL_CHROME_UI_REQUIRES_REVIEW';return
-        if attempt<3:
-            left=deadline-time.monotonic()
-            if left<=0:break
-            time.sleep(min(8,left))
     STATE['chromeObservationOutcome']='UNKNOWN_AFTER_BOUNDED_OBSERVATION'
+
+def launcher_chrome_target(xml,png):
+    if len(xml)>2*1024*1024 or b'<!DOCTYPE' in xml.upper() or b'<!ENTITY' in xml.upper():raise Refused('LAUNCHER_XML_INVALID')
+    tree=ET.fromstring(xml)
+    packages={e.get('package') for e in tree.iter() if e.get('package')}
+    launcher='com.google.android.apps.nexuslauncher'
+    if launcher not in packages or not packages.issubset({launcher,'android','com.android.systemui'}):raise Refused('EXACT_LAUNCHER_FOREGROUND_REQUIRED')
+    if len(png)<24 or png[:8]!=b'\x89PNG\r\n\x1a\n' or png[12:16]!=b'IHDR':raise Refused('LAUNCHER_SCREEN_DIMENSIONS_REQUIRED')
+    width=int.from_bytes(png[16:20],'big');height=int.from_bytes(png[20:24],'big')
+    if not(0<width<=16384 and 0<height<=16384):raise Refused('LAUNCHER_SCREEN_DIMENSIONS_REQUIRED')
+    candidates=[]
+    def walk(e,eligible=True):
+        eligible=eligible and e.get('enabled')!='false' and e.get('visible-to-user')!='false' and e.get('displayed')!='false'
+        if e.get('package')==launcher and e.get('text')=='Chrome' and e.get('content-desc')=='Chrome':
+            if not eligible or e.get('enabled')!='true' or e.get('clickable')!='true' or e.get('class')!='android.widget.TextView':raise Refused('CHROME_ICON_NOT_ELIGIBLE')
+            match=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',e.get('bounds',''))
+            if not match:raise Refused('CHROME_ICON_BOUNDS_REQUIRED')
+            x0,y0,x1,y1=map(int,match.groups())
+            if not(0<=x0<x1<=width and 0<=y0<y1<=height):raise Refused('CHROME_ICON_BOUNDS_REQUIRED')
+            candidates.append({'x':(x0+x1)//2,'y':(y0+y1)//2,'bounds':[x0,y0,x1,y1],'screen':[width,height]})
+        for child in e:walk(child,eligible)
+    walk(tree)
+    if len(candidates)!=1:raise Refused('UNIQUE_CHROME_ICON_REQUIRED')
+    return candidates[0]
+
+def launch_chrome_from_fresh_icon():
+    capture_start=time.monotonic();screen('android-pre-chrome-launch')
+    xml=(OUT/'android-pre-chrome-launch.xml').read_bytes();png=(OUT/'android-pre-chrome-launch.png').read_bytes()
+    target=launcher_chrome_target(xml,png)
+    if time.monotonic()-capture_start>10:raise Refused('LAUNCHER_ICON_SNAPSHOT_TOO_OLD')
+    STATE['chromeLaunchInput']={'kind':'single-native-launcher-icon-tap','xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'target':target,'snapshotAgeUpperBoundSeconds':time.monotonic()-capture_start,'attempts':1}
+    STATE['UIInputCommands']=1;save()
+    run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_fresh_chrome_launcher_icon',timeout=5)
+
+def chrome_diagnostic_categories(text):
+    lines=[line for line in text.splitlines() if re.search(r'chrome|chromium|\bcr_',line,re.I)]
+    patterns={'firstRunOrPolicy':r'first.?run|fre_|policy','nativeLibrary':r'native.?library|libraryloader','chromiumError':r'\berror\b|\bfatal\b','chromeANROrCrash':r'ANR in com\.android\.chrome|Process: com\.android\.chrome|com\.android\.chrome.*(?:crash|has died)','networkError':r'net::ERR_[A-Z_]+'}
+    return {key:sum(bool(re.search(pattern,line,re.I)) for line in lines) for key,pattern in patterns.items()}
+
+def retain_chrome_readonly_diagnostics():
+    row={'rawLogcatRetained':False,'categoryCountsAreNotCausalVerdicts':True}
+    STATE['chromeReadonlyDiagnostics']=row
+    try:
+        data,code,cut=run([ADB,'-s',SERIAL,'shell','pidof','com.android.chrome'],'chrome_pid_presence',timeout=3,allowed_failure=True,retain_stdout=False)
+        row['pidCommandExitCode']=code;row['chromePIDCount']=len(data.split()) if not cut and all(v.isdigit() for v in data.split()) else None
+        data,code,cut=run([ADB,'-s',SERIAL,'logcat','-d','-t','300','-v','brief'],'chrome_selected_logcat_categories',timeout=3,allowed_failure=True,limit=65536,retain_stdout=False)
+        row['logcatCommandExitCode']=code;row['captureTailLimited']=cut;row['categories']=chrome_diagnostic_categories(data.decode(errors='replace'))
+    except Refused as error:row['incompleteCode']=str(error) if str(error).startswith(('BOOT_PHASE_DEADLINE','OWN_COMMAND_TIMEOUT_')) else 'READONLY_DIAGNOSTICS_REFUSED'
+    save()
 
 def listener_guard():
     data,_,_=run(['ss','-ltn'],'selected_listeners')
@@ -253,8 +300,9 @@ def main():
         if not firstscreen_can_launch_chrome(packages):STATE['status']='STOP_ANDROID_FIRST_RUN_OR_NONLAUNCHER_UI_REQUIRES_REVIEW';return 0
         data,_,_=run([ADB,'-s',SERIAL,'shell','pm','list','packages','com.android.chrome'],'chrome_package')
         if b'package:com.android.chrome' not in data:raise Refused('ANDROID_CHROME_NOT_PRESENT')
-        run([ADB,'-s',SERIAL,'shell','am','start','-W','-n','com.android.chrome/com.google.android.apps.chrome.Main'],'launch_chrome_firstscreen',timeout=30)
+        launch_chrome_from_fresh_icon()
         observe_chrome_screen()
+        retain_chrome_readonly_diagnostics()
         version,_,cut=run([ADB,'-s',SERIAL,'shell','dumpsys','package','com.android.chrome'],'chrome_version',limit=2*1024*1024)
         lines=[line.strip() for line in version.decode(errors='replace').splitlines() if re.match(r'\s*version(?:Name|Code)=',line)]
         (OUT/'chrome_version.log').write_text('\n'.join(lines)+'\n');STATE['androidChromeVersionLines']=lines
