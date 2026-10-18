@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import tempfile
 import xml.etree.ElementTree as ET
 
 OUT=Path('evidence/android-boot')
@@ -171,10 +172,18 @@ def main():
         STATE['KVMACLChanged']=True;save()
         if not os.access('/dev/kvm',os.R_OK|os.W_OK):raise Refused('KVM_USER_ACCESS_NOT_AVAILABLE')
         run([str(SDK/'emulator/emulator'),'-accel-check'],'acceleration_check')
-        private=OUT/'pulse';private.mkdir(mode=0o700,exist_ok=True);private.chmod(0o700);socket=private.resolve()/'native';config=private/'only-null.pa'
+        # Linux sockaddr_un.sun_path holds108 bytes including its terminator.
+        # The real hosted checkout's old absolute socket was138 bytes long.
+        # Keep the socket in a fresh private short directory; no shared daemon.
+        private=Path(tempfile.mkdtemp(prefix='v15pa-',dir='/tmp'));private.chmod(0o700)
+        socket=private/'native';config=private/'only-null.pa'
+        if len(os.fsencode(socket))>=108:raise Refused('PRIVATE_UNIX_SOCKET_PATH_TOO_LONG')
+        STATE['privatePulseRuntime']={'path':str(private),'uid':private.stat().st_uid,'mode':private.stat().st_mode&0o777,'socketBytes':len(os.fsencode(socket))}
+        save()
         config.write_text('.fail\nload-module module-native-protocol-unix socket='+str(socket)+' auth-anonymous=1\nload-module module-null-sink sink_name=ci_silent rate=48000 channels=2\nset-default-sink ci_silent\nset-default-source ci_silent.monitor\n')
-        pulse=own_process(['pulseaudio','-n','--daemonize=no','--exit-idle-time=-1','--file='+str(config.resolve())],'pulse')
-        env=os.environ.copy();env['PULSE_SERVER']='unix:'+str(socket);env['PULSE_SINK']='ci_silent';env['PULSE_SOURCE']='ci_silent.monitor'
+        env=os.environ.copy();env['XDG_RUNTIME_DIR']=str(private)
+        env['PULSE_SERVER']='unix:'+str(socket);env['PULSE_SINK']='ci_silent';env['PULSE_SOURCE']='ci_silent.monitor'
+        pulse=own_process(['pulseaudio','-n','--daemonize=no','--exit-idle-time=-1','--file='+str(config.resolve())],'pulse',env=env)
         until=time.monotonic()+10
         while not socket.exists() and pulse.poll() is None and time.monotonic()<until:time.sleep(.1)
         if not socket.exists():raise Refused('PRIVATE_PULSE_NOT_READY')
