@@ -9,7 +9,7 @@ import windowed_pulse_recorder
 import audio_health_diagnostic
 HERE=Path(__file__).resolve().parent
 REPO=HERE.parents[2]
-PINS={'capture_monitor.c':'e7a2a0388df1a2f85272e0f2b03e84f8c537174c994ef766e3e8e826907a0509','routing.py':'9f1a25697b1c145dde14419da577b199c59712feadb191e6d671a75bbc482b59','validate_native.py':'5b2732b81c187de3976f3dabfbac1f3115c5f272c4ae039e40cc056523da2c5a'}
+PINS={'capture_monitor_windowed150.c':'077caef574836e1a1e6b8b46bb104d7965fc40a5f790c7d6ed3959b1820175d0','routing.py':'9f1a25697b1c145dde14419da577b199c59712feadb191e6d671a75bbc482b59','validate_native.py':'5b2732b81c187de3976f3dabfbac1f3115c5f272c4ae039e40cc056523da2c5a'}
 def sha(data):return hashlib.sha256(data).hexdigest()
 def native(name):
  p=REPO/'audio/native-pulse'/name
@@ -102,8 +102,8 @@ class Driver:
    if predicate(facts):return facts,path,receipt
    time.sleep(.2)
  def compile(self):
-  b=self.b;source=REPO/'audio/native-pulse/capture_monitor.c'
-  if sha(source.read_bytes())!=PINS['capture_monitor.c']:raise b.Refused('ORIGINAL_COLLECTOR_PIN')
+  b=self.b;source=REPO/'audio/native-pulse/capture_monitor_windowed150.c'
+  if sha(source.read_bytes())!=PINS['capture_monitor_windowed150.c']:raise b.Refused('ORIGINAL_COLLECTOR_PIN')
   flags,_,cut=b.run(['pkg-config','--cflags','--libs','libpulse'],'audio-pkg-config',timeout=5,limit=8192)
   if cut:raise b.Refused('LIBPULSE_FLAGS_TRUNCATED')
   binary=self.out/'capture_monitor';b.run(['gcc','-std=c11','-Wall','-Wextra','-Werror','-O2',str(source),'-o',str(binary)]+shlex.split(flags.decode())+['-lm'],'audio-compile',timeout=30)
