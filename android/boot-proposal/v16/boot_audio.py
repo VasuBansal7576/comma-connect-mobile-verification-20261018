@@ -1372,7 +1372,7 @@ def main():
         lines=[line.strip() for line in version.decode(errors='replace').splitlines() if re.match(r'\s*version(?:Name|Code)=',line)]
         (OUT/'chrome_version.log').write_text('\n'.join(lines)+'\n');STATE['androidChromeVersionLines']=lines
         if cut or not any(line.startswith('versionName=') for line in lines):raise Refused('ANDROID_CHROME_VERSION_UNVERIFIED')
-        if maybe_approved_chrome_terms_action(lines,sys.argv[1:]):return 0
+        if maybe_approved_chrome_terms_action(lines,[arg for arg in sys.argv[1:] if arg!='--explicit-v16-audio']):return 0
         STATE['status']='STOP_CHROME_FIRST_SCREEN_REQUIRES_REVIEW_NO_CONTINUATION'
         return 0
     except Refused as e:STATE['status']='REFUSED_CAPABILITY';STATE['refusalCode']=str(e);return 2
