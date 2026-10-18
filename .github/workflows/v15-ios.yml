@@ -47,6 +47,10 @@ jobs:
         run: python3 scripts/run_v15_capture.py "$SIMULATOR_UDID"
       - name: Strict finite PCM callback/PTS coverage
         run: python3 scripts/check_ci_pcm_structure.py evidence/v15-installed-output/system.f32 evidence/v15-installed-output/capture.json evidence/v15-installed-output/pts-coverage.json
+      - name: Preserve final selected simulator screen if it is still running
+        if: always() && env.SIMULATOR_UDID != ''
+        timeout-minutes: 1
+        run: xcrun simctl io "$SIMULATOR_UDID" screenshot evidence/final-simulator.png > evidence/final-screenshot.log 2>&1 || true
       - name: Cleanup only selected ephemeral simulator
         if: always() && env.SIMULATOR_UDID != ''
         run: xcrun simctl shutdown "$SIMULATOR_UDID" || true
@@ -59,5 +63,21 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: v15-installed-os-output-${{ github.run_id }}
-          path: evidence/
+          path: |
+            evidence/*.json
+            evidence/*.log
+            evidence/*.txt
+            evidence/*.png
+            evidence/native-calibration/
+            evidence/v15-installed-output/
+            evidence/v15-install-attachments/
+            evidence/v15-output-attachments/
+          retention-days: 3
+      - name: Retain optional raw Xcode bundles separately from stable receipts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v15-raw-xcresult-${{ github.run_id }}
+          path: evidence/*.xcresult/
           retention-days: 3

@@ -72,6 +72,11 @@ def main():
         result['handshake']=state.snapshot();result['ownedProcessesReaped']=all(p is None or p.poll()is not None for p in [test,collector])
         result['simulatorShutdownVerified']=False
         try:
+            screenshot=out/'last-simulator.png'
+            shot=subprocess.run(['xcrun','simctl','io',udid,'screenshot',str(screenshot)],capture_output=True,text=True,timeout=8)
+            result['diagnosticScreenshot']={'returnCode':shot.returncode,'sha256':hashlib.sha256(screenshot.read_bytes()).hexdigest()if shot.returncode==0 and screenshot.is_file()else None,'acceptanceEvidence':False}
+        except Exception as error:result['diagnosticScreenshot']={'errorClass':type(error).__name__,'acceptanceEvidence':False}
+        try:
             stopped=subprocess.run(['xcrun','simctl','shutdown',udid],capture_output=True,text=True,timeout=8);result['simulatorShutdownReturnCode']=stopped.returncode
             listed=subprocess.run(['xcrun','simctl','list','devices','--json'],capture_output=True,text=True,timeout=8)
             devices=[d for group in json.loads(listed.stdout)['devices'].values()for d in group if d['udid']==udid]
