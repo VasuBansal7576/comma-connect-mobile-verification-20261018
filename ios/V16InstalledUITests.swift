@@ -65,27 +65,92 @@ import Network
         attachment(name, String(decoding: encoded, as: UTF8.self))
         installCheckpoint("context." + name + ".after")
     }
-    private func nativeSummaryTap(_ name: String, in app: XCUIApplication) {
-        func candidates() -> [XCUIElement] {
-            let primary = app.buttons.matching(identifier: name).allElementsBoundByIndex.filter { $0.exists }
-            return primary.isEmpty
-                ? app.otherElements.matching(identifier: name).allElementsBoundByIndex.filter { $0.exists } : primary
-        }
-        for swipes in 0...3 {
-            let hits = candidates()
-            guard hits.count == 1 else { XCTFail("Unique actual summary required: " + name); return }
+    private func reviewedCurrentMenu() -> Bool {
+        let audio = host.links.matching(NSPredicate(format: "label == %@", "V16 silent OS audio comparison"))
+        let urls = host.links.matching(NSPredicate(format: "label == %@", "V16 URL/state controls"))
+        let badge = host.staticTexts.matching(NSPredicate(format: "label MATCHES %@", ".*V16.*e7ab13f79d01.*"))
+        // Presence, not visibility: these reviewed anchors can be below the current menu viewport.
+        return audio.count == 1 && audio.element.exists && urls.count == 1 && urls.element.exists
+            && badge.firstMatch.exists
+    }
+    private func nativeReveal(_ query: XCUIElementQuery, name: String, in app: XCUIApplication,
+                              insideDock: Bool, maxSwipes: Int = 12) -> XCUIElement? {
+        for swipes in 0...maxSwipes {
+            let hits = query.allElementsBoundByIndex.filter { $0.exists }
+            guard hits.count == 1 else { XCTFail("Unique actual reveal target required: " + name); return nil }
             let target = hits[0]
-            if target.isHittable {
-                guard target.isEnabled else { XCTFail("Actual summary disabled: " + name); return }
-                target.tap(); return
+            guard target.isEnabled else { XCTFail("Actual reveal target disabled: " + name); return nil }
+            if target.isHittable { return target }
+            guard swipes < maxSwipes else { XCTFail("Actual target remains offscreen: " + name); return nil }
+            let frame = target.frame
+            var viewport = app.frame
+            if insideDock {
+                let summaries = app.buttons.matching(identifier: "V16 verification controls").allElementsBoundByIndex.filter { $0.exists }
+                guard summaries.count == 1 else { XCTFail("Unique actual dock summary required"); return nil }
+                let top = summaries[0].frame.maxY
+                viewport = CGRect(x: viewport.minX, y: top, width: viewport.width, height: viewport.maxY - top)
             }
-            guard swipes < 3 else { XCTFail("Summary remains offscreen after three native swipes: " + name); return }
-            installCheckpoint("Summary.visibility-swipe.before")
-            app.swipeUp()
-            installCheckpoint("Summary.visibility-swipe.after")
+            // Offscreen WebKit AX can expose CGRect.zero. This is not native frame proof.
+            if frame == .zero && !insideDock && target.elementType == .link && reviewedCurrentMenu() {
+                attachment("v16-menu-native-autoreveal", "Unique enabled reviewed-current-menu Link has CGRect.zero; allowing ONE framework native tap. No coordinates, force or retry; destination and current badge remain required.")
+                return target
+            }
+            let values = [frame.minX, frame.minY, frame.width, frame.height,
+                          viewport.minX, viewport.minY, viewport.width, viewport.height]
+            guard values.allSatisfy({ $0.isFinite }), frame.width > 0, frame.height > 0,
+                  viewport.width > 0, viewport.height > 0, frame.height <= viewport.height,
+                  frame.maxX > viewport.minX, frame.minX < viewport.maxX else {
+                XCTFail("Unknown native reveal geometry: " + name); return nil
+            }
+            let direction: String
+            if frame.minY < viewport.minY { direction = "down" }
+            else if frame.maxY > viewport.maxY { direction = "up" }
+            else { XCTFail("Nonhittable target inside observed viewport; refusing unknown obstruction: " + name); return nil }
+            installCheckpoint("Reveal." + direction + ".before")
+            if direction == "up" { app.swipeUp() } else { app.swipeDown() }
+            installCheckpoint("Reveal." + direction + ".after")
+            let after = query.allElementsBoundByIndex.filter { $0.exists }
+            guard after.count == 1 else { XCTFail("Reveal target changed ownership/uniqueness: " + name); return nil }
+            let next = after[0].frame
+            let progressed = direction == "up" ? next.minY < frame.minY : next.minY > frame.minY
+            let unmeasuredCurrentMenuLink = next == .zero && !insideDock
+                && after[0].elementType == .link && reviewedCurrentMenu()
+            guard after[0].isHittable || progressed || unmeasuredCurrentMenuLink else {
+                XCTFail("No observed target-frame progress after native gesture: " + name); return nil
+            }
+        }
+        return nil
+    }
+    private func closeDeclaredNavigationIfOpen() {
+        let back = host.buttons.matching(identifier: "Browser Back")
+        if back.firstMatch.exists {
+            let evidence = host.buttons.matching(identifier: "Evidence export").firstMatch.exists
+                || host.otherElements.matching(identifier: "Evidence export").firstMatch.exists
+            if evidence { nativeSummaryTap("V16 verification controls", in: host) }
+            nativeSummaryTap("Declared browser navigation", in: host)
+            XCTAssertFalse(back.firstMatch.exists, "Actual history child must disappear before Evidence Menu lookup")
         }
     }
+    private func nativeMenuEntry() throws {
+        if reviewedCurrentMenu() { return }
+        revealEvidenceMenu()
+        let menu = host.links.matching(NSPredicate(format: "label == %@", "Menu"))
+        let target = try XCTUnwrap(nativeReveal(menu, name: "Evidence Menu", in: host, insideDock: true))
+        target.tap()
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.reviewedCurrentMenu() }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 12), .completed,
+                       "Real same-WebClip entry must reach reviewed current V16 menu")
+    }
+    private func nativeSummaryTap(_ name: String, in app: XCUIApplication) {
+        let buttons = app.buttons.matching(identifier: name)
+        let query = buttons.firstMatch.exists ? buttons : app.otherElements.matching(identifier: name)
+        guard let target = nativeReveal(query, name: name, in: app,
+            insideDock: name != "V16 verification controls" && name != "Declared browser navigation") else { return }
+        target.tap()
+    }
+
     private func openEvidenceExport() {
+        closeDeclaredNavigationIfOpen()
         let summaries = host.buttons.matching(identifier: "Evidence export").allElementsBoundByIndex
             + host.otherElements.matching(identifier: "Evidence export").allElementsBoundByIndex
         // Existing offscreen child means main is already open; hittability is not open state.
@@ -93,33 +158,27 @@ import Network
         let menu = host.links.matching(NSPredicate(format: "label == %@", "Menu"))
         if !menu.firstMatch.exists { nativeSummaryTap("Evidence export", in: host) }
         XCTAssertTrue(menu.firstMatch.waitForExistence(timeout: 8), "Actual Evidence Menu child required")
-        XCTAssertEqual(menu.count, 1, "Unique Evidence Menu child required")
+        XCTAssertEqual(menu.count, 1, "Unique Evidence Menu child required after collapsing history owner")
     }
+
     private func revealEvidenceMenu() {
         openEvidenceExport()
         let menu = host.links.matching(NSPredicate(format: "label == %@", "Menu"))
-        for _ in 0..<3 { if menu.element.isHittable { break }; host.swipeUp() }
-        XCTAssertTrue(menu.element.isHittable, "Actual Evidence Menu remains offscreen")
+        _ = nativeReveal(menu, name: "Evidence Menu", in: host, insideDock: true)
     }
+
     private func revealQuickResult(_ name: String, in app: XCUIApplication) {
-        // Stored Quick layout places these original buttons before Evidence export.
-        let query = app.buttons.matching(identifier: name)
-        for swipes in 0...3 {
-            let hits = query.allElementsBoundByIndex.filter { $0.exists }
-            guard hits.count == 1 else { XCTFail("Unique original Quick result required: " + name); return }
-            if hits[0].isHittable { return }
-            guard swipes < 3 else { XCTFail("Quick result remains offscreen after three native swipes: " + name); return }
-            app.swipeDown()
-        }
+        _ = nativeReveal(app.buttons.matching(identifier: name), name: name, in: app, insideDock: true)
     }
+
     private func ensureQuickControls(in app: XCUIApplication) {
         _ = text(".*V16.*e7ab13f79d01.*", in: app, timeout: 30)
-        if !(app.buttons["Pin actual playlist"].exists && app.buttons["Pin actual playlist"].isHittable) {
-            nativeSummaryTap("V16 verification controls", in: app)
-        }
-        XCTAssertTrue(app.buttons["Pin actual playlist"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.buttons["Pin actual playlist"].isHittable)
+        let pin = app.buttons.matching(identifier: "Pin actual playlist")
+        if !pin.firstMatch.exists { nativeSummaryTap("V16 verification controls", in: app) }
+        XCTAssertTrue(pin.firstMatch.waitForExistence(timeout: 8))
+        _ = nativeReveal(pin, name: "Pin actual playlist", in: app, insideDock: true)
     }
+
     private func ciPost(_ path: String, extra: [String: Any] = [:]) throws -> [String: Any] {
         let session = try XCTUnwrap(ciSession)
         let keys = ["schema", "runId", "runAttempt", "expectedUDID", "serverNonce", "sourceSHA256", "entrySHA256"]
@@ -357,28 +416,17 @@ import Network
         installCheckpoint("install.end")
     }
     private func audioFreshEntryFromCurrentMenu() throws {
-        // Same WebClip navigation only. Start from NF/URL/current App without requiring audio controls.
+        // Same WebClip navigation only; a previous test can leave the actual reviewed menu open.
         XCTAssertEqual(host.state, .runningForeground)
-        revealEvidenceMenu()
-        func visibleMenu() -> [XCUIElement] {
-            let buttons = host.buttons.matching(NSPredicate(format: "label == %@", "Menu")).allElementsBoundByIndex
-            let links = host.links.matching(NSPredicate(format: "label == %@", "Menu")).allElementsBoundByIndex
-            return (buttons + links).filter { $0.exists && $0.isEnabled && $0.isHittable }
-        }
-        let menuReady = XCTNSPredicateExpectation(predicate: NSPredicate { _,_ in visibleMenu().count == 1 }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [menuReady], timeout: 12), .completed, "Unique real same-WebClip Menu required")
-        let menus = visibleMenu(); XCTAssertEqual(menus.count, 1)
-        try XCTUnwrap(menus.first).tap()
-        // Exact current public menu anchor /v16/nqa. No URL command or DOM/JS navigation.
+        try nativeMenuEntry()
         let audio = host.links.matching(NSPredicate(format: "label == %@", "V16 silent OS audio comparison"))
         XCTAssertTrue(audio.firstMatch.waitForExistence(timeout: 12))
-        XCTAssertEqual(audio.count, 1)
-        let link = audio.element
-        for _ in 0..<8 { if link.isHittable { break }; host.swipeUp() }
-        XCTAssertTrue(link.isEnabled && link.isHittable)
+        let link = try XCTUnwrap(nativeReveal(audio, name: "V16 silent OS audio comparison", in: host, insideDock: false))
         link.tap()
+        _ = text(".*V16.*e7ab13f79d01.*", in: host, timeout: 30)
         XCTAssertTrue(host.wait(for: .runningForeground, timeout: 8), "Audio link left actual installed WebClip")
     }
+
     func testV16InstalledAudioProtocol() throws {
         launchHomeIcon(requireAudioControls: false)
         try audioFreshEntryFromCurrentMenu()

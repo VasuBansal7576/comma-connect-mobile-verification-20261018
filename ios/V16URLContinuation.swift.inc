@@ -25,14 +25,9 @@ extension V16InstalledUITests {
     private func urlTapLink(_ label: String) throws {
         let links = host.links.matching(NSPredicate(format: "label == %@", label))
         XCTAssertTrue(links.firstMatch.waitForExistence(timeout: 12), "Missing exact current link: " + label)
-        XCTAssertEqual(links.count, 1)
-        let link = links.element
-        for _ in 0..<8 {
-            if link.isHittable { break }
-            host.swipeUp()
-        }
-        XCTAssertTrue(link.isEnabled && link.isHittable)
+        let link = try XCTUnwrap(nativeReveal(links, name: label, in: host, insideDock: false))
         link.tap()
+        _ = text(".*V16.*e7ab13f79d01.*", in: host, timeout: 30)
     }
 
     private func urlDockOpen() {
@@ -53,9 +48,7 @@ extension V16InstalledUITests {
     }
 
     private func urlMenu() throws {
-        urlDockOpen()
-        revealEvidenceMenu()
-        try urlTapControl("Menu")
+        try nativeMenuEntry()
         XCTAssertTrue(host.links["V16 URL/state controls"].waitForExistence(timeout: 12))
     }
 

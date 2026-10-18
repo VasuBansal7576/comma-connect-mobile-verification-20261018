@@ -5,11 +5,11 @@ extension V16InstalledUITests {
     private func nfNativeLink(_ label: String) throws {
         let query = host.links.matching(NSPredicate(format: "label == %@", label))
         XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 8), "Missing reviewed same-shell link: " + label)
-        XCTAssertEqual(query.count, 1)
-        // Real bounded gestures only; do not click a guessed coordinate or alter page URL.
-        for _ in 0..<3 { if query.element.isHittable { break }; host.swipeUp() }
-        XCTAssertTrue(query.element.isHittable); query.element.tap()
+        let link = try XCTUnwrap(nativeReveal(query, name: label, in: host, insideDock: false))
+        link.tap()
+        _ = text(".*V16.*e7ab13f79d01.*", in: host, timeout: 30)
     }
+
     private func nfSummaryExists(_ name: String) -> Bool {
         let queries = host.buttons.matching(identifier: name).allElementsBoundByIndex
             + host.otherElements.matching(identifier: name).allElementsBoundByIndex
@@ -34,9 +34,9 @@ extension V16InstalledUITests {
         nativeSummaryTap("V16 verification controls", in: host)
     }
     private func nfMenu() throws {
-        openEvidenceExport()
-        try nfNativeLink("Menu")
+        try nativeMenuEntry()
     }
+
     private func nfLaunchInstalledIcon() {
         // Shared actual-Home search; audio-only quick controls are not required after NF/NG.
         launchHomeIcon(requireAudioControls: false)

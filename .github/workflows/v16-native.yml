@@ -47,23 +47,78 @@ jobs:
         timeout-minutes: 12
         run: |
           python3 scripts/bounded_official_v16.py install "$SIMULATOR_UDID"
+      - name: Retain small install checkpoint for live diagnosis
+        if: always() && steps.install.outcome != 'skipped'
+        timeout-minutes: 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v16-install-checkpoint-${{ github.run_id }}
+          path: |
+            evidence/bounded-install.json
+            evidence/v16-install-ui.log
+          retention-days: 3
+          if-no-files-found: error
       - name: Actual natural EOF continuation (transport classified from source)
         if: always() && steps.install.outcome == 'success'
         timeout-minutes: 8
         run: python3 scripts/bounded_official_v16.py native-eof "$SIMULATOR_UDID"
+      - name: Retain small eof checkpoint for live diagnosis
+        if: always() && steps.install.outcome == 'success'
+        timeout-minutes: 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v16-eof-checkpoint-${{ github.run_id }}
+          path: |
+            evidence/bounded-native-eof.json
+            evidence/v16-native-eof.log
+          retention-days: 3
+          if-no-files-found: error
       - name: Actual native failure branch or explicit unacquired evidence
         if: always() && steps.install.outcome == 'success'
         timeout-minutes: 8
         run: python3 scripts/bounded_official_v16.py native-failure "$SIMULATOR_UDID"
+      - name: Retain small failure checkpoint for live diagnosis
+        if: always() && steps.install.outcome == 'success'
+        timeout-minutes: 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v16-failure-checkpoint-${{ github.run_id }}
+          path: |
+            evidence/bounded-native-failure.json
+            evidence/v16-native-failure.log
+          retention-days: 3
+          if-no-files-found: error
       - name: Actual installed URL history, reload and settings continuation
         if: always() && steps.install.outcome == 'success'
         timeout-minutes: 11
         run: python3 scripts/bounded_official_v16.py native-url "$SIMULATOR_UDID"
+      - name: Retain small url checkpoint for live diagnosis
+        if: always() && steps.install.outcome == 'success'
+        timeout-minutes: 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v16-url-checkpoint-${{ github.run_id }}
+          path: |
+            evidence/bounded-native-url.json
+            evidence/v16-url.log
+          retention-days: 3
+          if-no-files-found: error
       - name: Native READY/ACK actual V16 protocol and150s system audio
         id: audio
         if: always() && steps.install.outcome == 'success'
         timeout-minutes: 9
         run: python3 scripts/run_v16_capture.py "$SIMULATOR_UDID"
+      - name: Retain small audio checkpoint for live diagnosis
+        if: always() && steps.install.outcome == 'success'
+        timeout-minutes: 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v16-audio-checkpoint-${{ github.run_id }}
+          path: |
+            evidence/v16-installed-output/command.json
+            evidence/v16-installed-output/ui-test.log
+          retention-days: 3
+          if-no-files-found: error
       - name: Strict finite PCM callback/PTS coverage
         if: always() && steps.audio.outcome == 'success'
         timeout-minutes: 1
