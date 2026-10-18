@@ -1,0 +1,69 @@
+name: Hosted API36 bundled Chrome observation only
+on:
+  workflow_dispatch:
+    inputs:
+      owner_reviewed_remote_prerequisites:
+        type: boolean
+        default: false
+        description: Use only already-accepted stable SDK license, ephemeral Ubuntu dependencies and silent owned emulator; no UI inputs or Chrome terms acceptance
+permissions:
+  contents: read
+jobs:
+  observe:
+    if: inputs.owner_reviewed_remote_prerequisites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Existing owned Linux late-descendant capability
+        run: |
+          mkdir -p evidence
+          python3 android/boot-proposal/v16/linux_subreaper_probe.py --owned-linux-capability-probe > evidence/linux-subreaper-probe.json
+      - name: Official SDK parser and existing license state, exact API36 target
+        timeout-minutes: 3
+        run: python3 android/boot-proposal/api36-observe/license-probe/probe.py
+      - name: Stable revision7 and already accepted24333 license, no new agreement
+        run: python3 android/boot-proposal/api36-observe/guard.py evidence/android-license-parser/receipt.json evidence/android-stable-setup/plan.json
+      - name: Fixed official SDK download with EOF and owned process cleanup
+        id: sdk_install
+        timeout-minutes: 9
+        run: python3 android/boot-proposal/api36-observe/sdk_install.py
+      - name: Exact installed revisions and unchanged license bytes and modes
+        if: always() && steps.sdk_install.outcome != 'skipped'
+        run: python3 android/boot-proposal/api36-observe/verify-installed.py
+      - name: Existing official Ubuntu dependency index helper
+        run: python3 android/boot-proposal/run-bounded.py apt-update
+      - name: Existing Ubuntu FLOSS silent-emulator dependencies
+        run: python3 android/boot-proposal/run-bounded.py apt-install
+      - name: Silent first-screen schema and read-only actual bundled Chrome version
+        id: boot
+        timeout-minutes: 8
+        run: |
+          python3 android/boot-proposal/api36-observe/boot_observe.py
+          python3 -c 'import json; from pathlib import Path; r=json.loads(Path("evidence/android-boot/receipt.json").read_text()); assert r.get("status") == "API36_FIRST_SCREEN_AND_CHROME_VERSION_OBSERVED_NO_UI_INPUT" and r.get("UIInputCommands") == 0 and r.get("actualAPILevel") == 36, "Actual observation incomplete"'
+      - name: Always clean only owned emulator, daemon and ADB and restore KVM ACL
+        if: always() && steps.boot.outcome != 'skipped'
+        timeout-minutes: 2
+        run: |
+          python3 android/boot-proposal/api36-observe/boot_observe.py --cleanup
+          python3 -c 'import json; from pathlib import Path; r=json.loads(Path("evidence/android-boot/receipt.json").read_text()); assert r.get("ownedChildCleanupVerified") is True and r.get("KVMACLChanged") is False and r.get("ownedADBServerCleanupExitCode") == 0 and r.get("UIInputCommands") == 0, "Owned cleanup and no-input proof required"'
+      - name: Retain metadata, actual version and first-screen schema without product code
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-api36-observe-${{ github.run_id }}
+          path: |
+            evidence/linux-subreaper-probe.json
+            evidence/android-license-parser/receipt.json
+            evidence/android-license-parser/sdk-result.json
+            evidence/android-license-parser/*-diagnostic.txt
+            evidence/android-stable-setup/
+            evidence/android-api36-install/
+            evidence/android-boot/**/*.json
+            evidence/android-boot/*.png
+            evidence/android-boot/*.xml
+            evidence/android-boot/*.log
+          retention-days: 3
+          if-no-files-found: error
