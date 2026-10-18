@@ -1,0 +1,59 @@
+# PROPOSAL ONLY. No browser continuation or SDK license acceptance is implemented.
+name: Hosted Android stable boot and first-screen proposal
+on:
+  workflow_dispatch:
+    inputs:
+      owner_reviewed_remote_prerequisites:
+        type: boolean
+        default: false
+        description: Provision only accepted stable SDK packages and Ubuntu audio tools on this ephemeral VM
+permissions:
+  contents: read
+jobs:
+  prerequisites:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Fresh installed SDK parser evidence only
+        run: python3 android/boot-proposal/license-probe/probe.py
+      - name: Bind exact already-accepted stable channel/revision rows
+        run: python3 android/boot-proposal/guard.py evidence/android-license-parser/receipt.json evidence/android-stable-setup/plan.json
+      - name: Stable SDK installation with EOF, no license acceptance
+        id: sdk_install
+        if: inputs.owner_reviewed_remote_prerequisites
+        run: python3 android/boot-proposal/run-bounded.py sdk
+      - name: Check installed revisions and unchanged SDK license files even after installer failure
+        if: always() && inputs.owner_reviewed_remote_prerequisites && steps.sdk_install.outcome != 'skipped'
+        run: python3 android/boot-proposal/verify-installed.py
+      - name: Official Ubuntu prerequisite package index
+        if: inputs.owner_reviewed_remote_prerequisites
+        run: python3 android/boot-proposal/run-bounded.py apt-update
+      - name: Explicit Ubuntu FLOSS audio and ACL dependencies
+        if: inputs.owner_reviewed_remote_prerequisites
+        run: python3 android/boot-proposal/run-bounded.py apt-install
+      - name: Owned KVM ACL, null-sink-only Pulse and silent boot; stop on first-run UI
+        if: inputs.owner_reviewed_remote_prerequisites
+        run: python3 android/boot-proposal/boot.py
+      - name: Always clean bound owned processes and restore KVM ACL
+        if: always() && inputs.owner_reviewed_remote_prerequisites
+        run: python3 android/boot-proposal/boot.py --cleanup
+      - name: Retain prerequisite receipts, selected UI and bounded sanitized logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-firstscreen-prerequisites-${{ github.run_id }}
+          path: |
+            evidence/android-license-parser/receipt.json
+            evidence/android-license-parser/sdk-result.json
+            evidence/android-license-parser/*-diagnostic.txt
+            evidence/android-stable-setup/plan.json
+            evidence/android-stable-setup/post-install.json
+            evidence/android-boot/receipt.json
+            evidence/android-boot/*.png
+            evidence/android-boot/*.xml
+            evidence/android-boot/*.log
+          retention-days: 3
+          if-no-files-found: error
