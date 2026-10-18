@@ -1,0 +1,28 @@
+name: Exact iOS16 official client probe, ephemeral host only
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-client:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: One exact Apple client request, may install, never accept agreements
+        timeout-minutes: 18
+        run: |
+          echo "a229e926c10bccae3c9ac1cde12eb7ccbf1d47db6c96d7b546a3ce14dbac459e  scripts/probe_ios16_official_client.py" | shasum -a 256 -c -
+          python3 scripts/probe_ios16_official_client.py --reviewed-ephemeral-official-client-probe
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: ios16-official-client-${{ github.run_id }}
+          path: |
+            evidence/ios16-official-client/receipt.json
+            evidence/ios16-official-client/*.log
+          retention-days: 7
