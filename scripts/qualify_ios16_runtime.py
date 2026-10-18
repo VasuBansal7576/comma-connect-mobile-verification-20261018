@@ -100,6 +100,17 @@ def require_bootstatus_help(text):
     option=re.search(r'(?<![\w-])-b(?![\w-])',usage.group(0))if usage else None
     if usage is None or(option is None and re.search(r'^\s*-b(?:\s|$)',text,re.MULTILINE)is None):raise Refused('ACTUAL_SIMCTL_BOOTSTATUS_HELP_REQUIRED')
 
+def require_quiet_help(text):
+    R.pop('downloadOutputPolicy',None)
+    if not re.search(r'^[ \t]+-quiet[ \t]+do not print any output except for warnings and errors[ \t]*$',text,re.MULTILINE):raise Refused('ACTUAL_DOCUMENTED_QUIET_OPTION_REQUIRED')
+    R['downloadOutputPolicy']={'option':'-quiet','actualHelpSHA256':hashlib.sha256(text.encode()).hexdigest(),'documentedScope':'Do not print ordinary output except warnings/errors; no resource or consent guard is waived.'}
+
+def quiet_fixed_command(export):
+    if R.get('downloadOutputPolicy',{}).get('option')!='-quiet':raise Refused('DOCUMENTED_QUIET_GUARD_REQUIRED')
+    original=CLIENT.fixed_command(export)
+    if original!=['/usr/bin/xcodebuild','-downloadPlatform','iOS','-buildVersion','20E247','-exportPath',str(export)]:raise Refused('ORIGINAL_EXACT_CLIENT_ARGV_REQUIRED')
+    return original[:1]+['-quiet']+original[1:]
+
 def runtime_support(runtime):
     evidence={'scope':'Actual simctl declarations, not independent archive signature/architecture verification.'}
     arch=runtime.get('supportedArchitectures')
@@ -124,7 +135,7 @@ def qualify():
     require_bootstatus_help(call('help-bootstatus',['/usr/bin/xcrun','simctl','help','bootstatus'],20))
     if runtime is None:
         export=(OUT/'export').resolve();export.mkdir(exist_ok=False);R['ownedExportCreated']=True;save()
-        call('official-exact-download',CLIENT.fixed_command(export),720,scan=True,export=export)
+        call('official-exact-download',quiet_fixed_command(export),720,scan=True,export=export)
         files=list(export.rglob('*'))
         if any(p.is_symlink()for p in files):raise Refused('ARCHIVE_SYMLINK_REFUSED')
         files=[p for p in files if p.is_file()]
@@ -211,7 +222,8 @@ def main():
         CLIENT.START=START;CLIENT.R=R;CLIENT.save=save;R['supervisorSHA256']=BASE_SHA;R['helperSHA256']=hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest();save()
         version=call('xcode-version',['/usr/bin/xcodebuild','-version'],15)
         if version.strip()!='Xcode 16.4\nBuild version 16F6':raise Refused('EXACT_EXISTING_XCODE164_REQUIRED')
-        CLIENT.require_help(call('xcode-help',['/usr/bin/xcodebuild','-help'],20))
+        help_text=call('xcode-help',['/usr/bin/xcodebuild','-help'],20)
+        CLIENT.require_help(help_text);require_quiet_help(help_text)
         call('firstlaunch-status',['/usr/bin/xcodebuild','-checkFirstLaunchStatus'],20)
         qualify();R['status']='EXACT_RUNTIME_OWN_DEVICE_BOOT_QUALIFIED_PENDING_CLEANUP';save()
     except Exception as error:
