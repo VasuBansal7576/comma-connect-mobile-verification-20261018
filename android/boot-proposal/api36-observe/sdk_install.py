@@ -5,7 +5,7 @@ def main():
  if sys.argv[1:]:raise SystemExit('Fixed operation takes no arguments')
  if os.uname().sysname!='Linux'or os.environ.get('GITHUB_ACTIONS')!='true'or os.environ.get('RUNNER_OS')!='Linux'or os.environ.get('RUNNER_ARCH')!='X64':raise SystemExit('Owned hosted Linux X64 only')
  path=HERE.parent/'v16/owned_audio_command.py'
- if hashlib.sha256(path.read_bytes()).hexdigest()!='3ff20c919cb167716c41f2f9aaf6797aed9aa008cadc82398ef0e48be07d9c66':raise SystemExit('Exact existing owned command primitive required')
+ if hashlib.sha256(path.read_bytes()).hexdigest()!='b39386de3fdda42f2a2ff64ebe9c4682be2f8d5d5eb29f41c5ab3a71a3241ca6':raise SystemExit('Exact existing owned command primitive required')
  spec=importlib.util.spec_from_file_location('api36_owned_sdk',path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
  guardpath=HERE/'guard.py';spec=importlib.util.spec_from_file_location('api36_exact_guard',guardpath);g=importlib.util.module_from_spec(spec);spec.loader.exec_module(g)
  receipt=json.loads(pathlib.Path('evidence/android-license-parser/receipt.json').read_text());expected=g.select(receipt);plan=json.loads(pathlib.Path('evidence/android-stable-setup/plan.json').read_text())

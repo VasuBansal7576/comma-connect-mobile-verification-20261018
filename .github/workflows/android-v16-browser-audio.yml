@@ -30,6 +30,9 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+      - name: Existing Node read-only CDP capability before SDK or emulator
+        timeout-minutes: 2
+        run: python3 android/boot-proposal/v16/node_readonly_preflight.py
       - name: Actual owned Linux late-descendant adoption and exact-child reap
         if: inputs.owner_reviewed_remote_prerequisites
         run: |
@@ -84,6 +87,7 @@ jobs:
         with:
           name: android-v16-browser-native-audio-${{ github.run_id }}
           path: |
+            evidence/android-node-runtime/
             evidence/android-audio-deps/
             evidence/android-boot/audio/
             evidence/linux-subreaper-probe.json

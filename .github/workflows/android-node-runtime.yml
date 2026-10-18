@@ -1,0 +1,26 @@
+name: Existing Node read-only transport capability only
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Observe actual PATH Node and select only existing capability-proved toolcache Node
+        timeout-minutes: 2
+        run: python3 android/boot-proposal/v16/node_readonly_preflight.py
+      - name: Verify selected Node applies to subsequent fixed-reader step
+        run: node -e 'if(typeof WebSocket!=="function")process.exit(2);process.stdout.write(JSON.stringify({node:process.versions.node,webSocketType:typeof WebSocket})+"\n")'
+      - name: Retain only own runtime capability and process cleanup receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-node-runtime-${{ github.run_id }}
+          path: evidence/android-node-runtime/
+          retention-days: 3
+          if-no-files-found: error

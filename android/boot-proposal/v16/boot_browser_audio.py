@@ -1045,7 +1045,7 @@ def observe_installed_pwa_readonly():
         STATE['readonlyInstalledObservation']={'status':'NO_NEW_CDP_READ_INSUFFICIENT_ORIGINAL_CAP'};save();return
     import importlib.util,shutil
     here=Path(__file__).resolve().parent;bridge=here/'readonly_bridge_v16.py';reader=here/'read_dom_v16.mjs'
-    if hashlib.sha256(bridge.read_bytes()).hexdigest()!='b82f1cc19465fa492d596b97a89a8e0ed27c485789116f410521e4766ca8144e' or hashlib.sha256(reader.read_bytes()).hexdigest()!='5255f8463ee01cac5f6a63f3598e0045c2514b53373b5131694cf710d09ca06a':raise Refused('PINNED_READONLY_OBSERVER_REQUIRED')
+    if hashlib.sha256(bridge.read_bytes()).hexdigest()!='b82f1cc19465fa492d596b97a89a8e0ed27c485789116f410521e4766ca8144e' or hashlib.sha256(reader.read_bytes()).hexdigest()!='d5a6139345fa5df962ca8690842bf0f07d99304ecb474c1ab8ce25866f8153e3':raise Refused('PINNED_READONLY_OBSERVER_REQUIRED')
     node=shutil.which('node')
     if not node:raise Refused('EXISTING_NODE_REQUIRED_NO_INSTALL')
     spec=importlib.util.spec_from_file_location('owned_readonly_v16',bridge);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
