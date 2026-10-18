@@ -32,8 +32,8 @@ jobs:
           cp capture-system-audio150 capture-system-audio
           python3 scripts/run_native_calibration.py evidence/native-calibration
           python3 scripts/assess_pcm.py evidence/native-calibration/system.f32 evidence/native-calibration/capture.json evidence/native-calibration/assessment.json
-      - name: Build test-only unsigned UI helper using existing simulator SDK
-        timeout-minutes: 5
+      - name: Select and boot only the existing iOS simulator
+        timeout-minutes: 3
         run: |
           python3 scripts/generate_v15_project.py
           simulator=$(python3 scripts/select_simulator.py)
@@ -41,7 +41,10 @@ jobs:
           xcrun simctl boot "$simulator"
           xcrun simctl bootstatus "$simulator" -b
           open -a Simulator
-          xcodebuild build-for-testing -project CIProbeV15.xcodeproj -scheme CIProbeV15 -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO > evidence/v15-build-ui.log 2>&1
+      - name: Build test-only unsigned UI helper using existing simulator SDK
+        timeout-minutes: 5
+        run: |
+          xcodebuild build-for-testing -project CIProbeV15.xcodeproj -scheme CIProbeV15 -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -derivedDataPath DerivedData ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO > evidence/v15-build-ui.log 2>&1
       - name: Real Safari Add Home and Home icon launch
         timeout-minutes: 4
         run: |
