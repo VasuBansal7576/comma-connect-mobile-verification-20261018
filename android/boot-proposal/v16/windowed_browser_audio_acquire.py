@@ -6,6 +6,7 @@ import native_audio_input as ui
 import readonly_browser_audio_bridge_v16 as bridge
 import unpack_android_browser_carrier as unpack
 import windowed_pulse_recorder
+import audio_health_diagnostic
 HERE=Path(__file__).resolve().parent
 REPO=HERE.parents[2]
 PINS={'capture_monitor.c':'e7a2a0388df1a2f85272e0f2b03e84f8c537174c994ef766e3e8e826907a0509','routing.py':'9f1a25697b1c145dde14419da577b199c59712feadb191e6d671a75bbc482b59','validate_native.py':'5b2732b81c187de3976f3dabfbac1f3115c5f272c4ae039e40cc056523da2c5a'}
@@ -85,12 +86,18 @@ class Driver:
   inputs=self.r.input_bindings(rows['sink-inputs'],si,self.emulator,self.r.proc_record,require_nonempty=require_output)
   recorder,classification=windowed_pulse_recorder.bind(rows['source-outputs'],mo,self.recorder,self.r,b=self.b,emulator=self.emulator)
   receipt={'sourceOutputClassification':classification,'hostMonotonic':time.monotonic(),'sinkIndex':si,'monitorIndex':mo,'emulatorOutputs':inputs,'nativeRecorder':recorder,'rows':rows};self.graph_receipts.append(receipt);self.save();return receipt
- def wait(self,predicate,limit,graph=False):
+ def wait(self,predicate,limit,graph=False,diagnose_prepare_health=False):
   end=time.monotonic()+limit
   while True:
    self.check()
    if graph:self.graph(False)
    facts,path,receipt=self.observe()
+   if diagnose_prepare_health and facts.get('quickStatus')==audio_health_diagnostic.REASON:
+    try:
+     audio_health_diagnostic.capture(self);self.b.STATE['audioPrepareHealthDiagnostic']='CURRENT_POST_REFUSAL_STATE_RETAINED'
+    except Exception as error:
+     self.b.STATE['audioPrepareHealthDiagnostic']={'status':'DIAGNOSTIC_UNQUALIFIED_OR_INCOMPLETE','errorClass':type(error).__name__,'reason':str(error)[:512]}
+    self.b.save();raise self.b.Refused('ACTUAL_PREPARE_HEALTH_REFUSED_NO_RETRY')
    if time.monotonic()>=end:raise self.b.Refused('ACTUAL_AUDIO_READINESS_TIMEOUT')
    if predicate(facts):return facts,path,receipt
    time.sleep(.2)
@@ -130,7 +137,7 @@ class Driver:
    if str(e)!='CURRENT_NATIVE_LABEL_ABSENT':raise
    self.tap('V16 verification controls')
   self.tap('Pin actual playlist');self.wait(lambda f:'playlist=PINNED assets=6 'in f['osStatus'],20)
-  self.tap('Prepare playback');self.wait(lambda f:f['quickStatus'].startswith('READY: native playing and unmuted.'),12)
+  self.tap('Prepare playback');self.wait(lambda f:f['quickStatus'].startswith('READY: native playing and unmuted.'),12,diagnose_prepare_health=True)
   self.start_capture(binary);self.tap('Start pilot and run');self.wait(lambda f:f['quickStatus']=='RUNNING: original pilot and product phases armed once.',8,True);self.start_confirmed=True
   self.wait(lambda f:f['productAbsent']and f['closeCount']==0,48,True);self.seq.closed=True
   self.tap('Start bare native');self.wait(lambda f:'bare-native source=LIVE 'in f['osStatus'],8,True)
