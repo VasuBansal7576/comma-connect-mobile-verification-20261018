@@ -960,7 +960,7 @@ def verified_post_install_readiness(version_lines):
 
 
 def observed_bodyless_chrome_after_placement(xml,png,version_lines):
-    # Native Chrome structure permits bounded READONLY retry, NEVER ready/input.
+    # Native Chrome structure only; Home eligibility additionally requires current placement proof.
     if {line.removeprefix('versionName=')for line in version_lines if line.startswith('versionName=')}!={'124.0.6367.219'}:return False
     if len(xml)>2*1024*1024 or b'<!DOCTYPE'in xml.upper()or b'<!ENTITY'in xml.upper():return False
     if len(png)<24 or png[:8]!=b'\x89PNG\r\n\x1a\n'or png[12:16]!=b'IHDR':return False
@@ -1004,6 +1004,21 @@ def observed_bodyless_chrome_after_placement(xml,png,version_lines):
         return len(e)==len(children)and all(match(child,expected,(a,b,c,d))for child,expected in zip(e,children))
     return match(tree[0],spec)
 
+def native_home_eligibility(xml,png,version_lines,historical=False):
+    try:known_owned_chrome_without_dialog(xml,png,version_lines);return 'ORIGINAL_FULL_CHROME_CONTEXT_READY'
+    except Refused:
+        if not observed_bodyless_chrome_after_placement(xml,png,version_lines):raise
+    verified_final_install_context(version_lines)
+    placement=STATE.get('ownedPWAPlacementInput',{})
+    if placement.get('tapCommandCompleted')is not True or placement.get('attempts')!=1 or placement.get('inputOrdinalBefore')!=7 or placement.get('inputOrdinal')!=8 or placement.get('finalInstallSnapshotLabel')!=STATE['ownedFinalInstallInput']['inputSnapshotLabel']:raise Refused('CURRENT_OWN_PLACEMENT_PROVENANCE_REQUIRED')
+    px,pp=retained_context(placement,r'owned-v16-before-home-after-install-input-attempt-[1-3]')
+    if nexus_placement_target(px,pp,version_lines)!=placement.get('target'):raise Refused('OWN_PLACEMENT_CONTEXT_TARGET_MISMATCH')
+    if historical:
+        home=STATE.get('ownedHomeAfterInstallInput',{})
+        if home.get('kind')!='NATIVE_HOME_KEY'or home.get('transitionCompleted')is not True or home.get('keyCode')!=3 or home.get('tapCommandCompleted')is not True or home.get('completedInputOrdinal')!=9:raise Refused('CURRENT_POST_PLACEMENT_HOME_HISTORY_REQUIRED')
+    elif STATE.get('UIInputCommands')!=8:raise Refused('CURRENT_COMPLETED_PLACEMENT_INPUT8_REQUIRED')
+    return 'NATIVE_HOME_ELIGIBLE_NO_PRODUCT_VERDICT'
+
 def post_placement_ready_snapshot(version_lines):
     start=time.monotonic();deadline=min(start+30,START+CAP);rows=[];STATE['postPlacementContextReadiness']={'deadlineBootSeconds':deadline-START,'attempts':rows,'inputRetries':0};save()
     transient={'UI_DUMP_REPORTED_ERROR','UI_DUMP_SUCCESS_MARKER_REQUIRED','UI_XML_INVALID','OWN_COMMAND_FAILED_ui_dump','OWN_COMMAND_FAILED_ui_xml','OWN_COMMAND_TIMEOUT_ui_dump','OWN_COMMAND_TIMEOUT_ui_xml','OWN_COMMAND_TIMEOUT_screen_png','CHROME_SCREEN_OBSERVATION_DEADLINE'}
@@ -1022,10 +1037,9 @@ def post_placement_ready_snapshot(version_lines):
         xml=(OUT/(label+'.xml')).read_bytes();png=(OUT/(label+'.png')).read_bytes();row.update(xmlSHA256=hashlib.sha256(xml).hexdigest(),pngSHA256=hashlib.sha256(png).hexdigest())
         try:
             if observed_home_workspace(xml):launcher_workspace_context(xml,png);kind='ORIGINAL_KNOWN_HOME_READY'
-            else:known_owned_chrome_without_dialog(xml,png,version_lines);kind='ORIGINAL_FULL_CHROME_CONTEXT_READY'
+            else:kind=native_home_eligibility(xml,png,version_lines)
         except Refused as error:
-            if not observed_bodyless_chrome_after_placement(xml,png,version_lines):row.update(status='UNKNOWN_CONTEXT_NO_MORE_READS_OR_INPUT',code=str(error));save();raise
-            row.update(status='STRUCTURAL_BODYLESS_CHROME_READONLY_WAIT',code=str(error));save();continue
+            row.update(status='UNKNOWN_CONTEXT_NO_MORE_READS_OR_INPUT',code=str(error));save();raise
         row['status']=kind;STATE['postPlacementContextReadiness']['successfulLabel']=label;save()
         return {'label':label,'captureStartMonotonic':began,'captureCompleteMonotonic':complete,'packages':packages},xml,png
     STATE['postPlacementContextReadiness']['status']='EXHAUSTED_NO_HOME_INPUT';save();raise Refused('POST_PLACEMENT_CONTEXT_READINESS_EXHAUSTED')
@@ -1278,8 +1292,8 @@ def verified_final_install_context(version_lines):
     if final_install_target(xml,png,version_lines)!=final.get('target'):raise Refused('OWNED_FINAL_INSTALL_CONTEXT_TARGET_MISMATCH')
 
 def dispatch_known_home_key(fresh,xml,png,version_lines):
-    known_owned_chrome_without_dialog(xml,png,version_lines);age=input_age(fresh)
-    STATE['ownedHomeAfterInstallInput']={'kind':'NATIVE_HOME_KEY','transitionCompleted':False,'inputSnapshotLabel':fresh['label'],'snapshotAgeUpperBoundSeconds':age,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'keyCode':3,'tapCommandCompleted':False};STATE['UIInputCommands']+=1;save();input_age(fresh)
+    eligibility=native_home_eligibility(xml,png,version_lines);age=input_age(fresh)
+    STATE['ownedHomeAfterInstallInput']={'kind':'NATIVE_HOME_KEY','nativeHomeEligibility':eligibility,'productReadinessInferred':False,'transitionCompleted':False,'inputSnapshotLabel':fresh['label'],'snapshotAgeUpperBoundSeconds':age,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'keyCode':3,'tapCommandCompleted':False};STATE['UIInputCommands']+=1;save();input_age(fresh)
     run([ADB,'-s',SERIAL,'shell','input','keyevent','3'],'home_after_owned_install',timeout=5)
     STATE['ownedHomeAfterInstallInput'].update(transitionCompleted=True,tapCommandCompleted=True,completedInputOrdinal=STATE['UIInputCommands']);save()
 
@@ -1294,7 +1308,7 @@ def verified_home_transition(version_lines):
     if home.get('kind')=='NATIVE_HOME_KEY':
         if home.get('keyCode')!=3 or home.get('tapCommandCompleted')is not True or home.get('completedInputOrdinal')!=8+extra:raise Refused('CURRENT_NATIVE_HOME_KEY_PROVENANCE_REQUIRED')
         pattern=r'owned-v16-after-owned-placement-input-attempt-[1-3]'if extra else r'owned-v16-before-home-after-install-input-attempt-[1-3]'
-        xml,png=retained_context(home,pattern);known_owned_chrome_without_dialog(xml,png,version_lines);return 8+extra
+        xml,png=retained_context(home,pattern);native_home_eligibility(xml,png,version_lines,historical=True);return 8+extra
     if home.get('kind')=='OBSERVED_HOME_AFTER_PLACEMENT_NO_KEY':
         if not extra or home.get('keyCode')is not None or home.get('tapCommandCompleted')is not False or home.get('completedInputOrdinal')!=8:raise Refused('CURRENT_OBSERVED_HOME_PLACEMENT_REQUIRED')
         xml,png=retained_context(home,r'owned-v16-after-owned-placement-input-attempt-[1-3]');launcher_workspace_context(xml,png);return 8

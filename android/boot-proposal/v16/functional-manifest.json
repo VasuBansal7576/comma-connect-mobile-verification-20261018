@@ -1,10 +1,10 @@
 {
   "schema": "v16-owned-android-functional-input-set-v1",
-  "defaultBootUnchangedSHA256": "a8b10a84c2b0126b00744fac2926a87734ab9e58fb86ac095076e63b9b17c14b",
+  "defaultBootUnchangedSHA256": "efcdfbbd7d0155f8d0e1488dda6137eb670190ccc7c2d063b544c6031fa39226",
   "runtimeFiles": {
     "boot.py": {
-      "sha256": "a8b10a84c2b0126b00744fac2926a87734ab9e58fb86ac095076e63b9b17c14b",
-      "bytes": 123716
+      "sha256": "efcdfbbd7d0155f8d0e1488dda6137eb670190ccc7c2d063b544c6031fa39226",
+      "bytes": 125024
     },
     "readonly_bridge_v16.py": {
       "sha256": "b82f1cc19465fa492d596b97a89a8e0ed27c485789116f410521e4766ca8144e",
@@ -15,7 +15,7 @@
       "bytes": 5309
     },
     "derive_functional_boot.py": {
-      "sha256": "a7483a14edba24fb2f6ff14976a298ac6b779e1412ff3484d83f5aff1f7b46f4",
+      "sha256": "fbce5b8f65e4e09a5aff1950730a6fcbbd77b2996472acc9f46e46843430e3a3",
       "bytes": 3076
     },
     "functional_acquire.py": {
@@ -39,8 +39,8 @@
       "bytes": 5479
     }
   },
-  "derivedSourceSHA256": "714c955149544c233f256668682e1bfc9e44494bf73df33476ae2cfa432b7c0e",
-  "derivedSourceBytes": 125260,
+  "derivedSourceSHA256": "a9f55173b2d4be93c1f7112a74e253ab798d2ccc6a5ab451fa7455508069ca30",
+  "derivedSourceBytes": 126568,
   "entrypoints": [
     "url",
     "eof",
