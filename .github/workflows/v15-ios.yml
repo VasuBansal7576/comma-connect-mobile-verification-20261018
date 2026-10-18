@@ -15,6 +15,13 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+      - name: Anonymous HTTP diagnostic (retain failure receipt)
+        continue-on-error: true
+        timeout-minutes: 1
+        run: python3 scripts/verify_v15_public_bytes.py
+      - name: Mandatory actual default Chrome strict byte gate
+        timeout-minutes: 2
+        run: node scripts/browser_default_preflight.mjs
       - name: Existing native output calibration and bounded150s collector
         run: |
           test "$GITHUB_ACTIONS" = true
@@ -25,8 +32,6 @@ jobs:
           cp capture-system-audio150 capture-system-audio
           python3 scripts/run_native_calibration.py evidence/native-calibration
           python3 scripts/assess_pcm.py evidence/native-calibration/system.f32 evidence/native-calibration/capture.json evidence/native-calibration/assessment.json
-      - name: Verify exact public V15 entry and actual manifest identity
-        run: python3 scripts/verify_v15_public_bytes.py
       - name: Build test-only unsigned UI helper using existing simulator SDK
         timeout-minutes: 5
         run: |
