@@ -109,11 +109,11 @@ def execute(label,argv,seconds,export=None):
     return text
 
 def require_help(text):
-    for option in ['-downloadPlatform','-buildVersion','-exportPath','-architectureVariant','-checkFirstLaunchStatus']:
+    for option in ['-downloadPlatform','-buildVersion','-exportPath','-checkFirstLaunchStatus']:
         if option not in text:raise Refused('REQUIRED_ACTUAL_HELP_OPTION_MISSING')
 
 def fixed_command(export):
-    return ['/usr/bin/xcodebuild','-downloadPlatform','iOS','-buildVersion','20E247','-architectureVariant','universal','-exportPath',str(export)]
+    return ['/usr/bin/xcodebuild','-downloadPlatform','iOS','-buildVersion','20E247','-exportPath',str(export)]
 
 def main():
     global START

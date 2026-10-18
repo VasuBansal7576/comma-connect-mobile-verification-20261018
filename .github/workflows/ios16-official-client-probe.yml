@@ -16,7 +16,7 @@ jobs:
       - name: One exact Apple client request, may install, never accept agreements
         timeout-minutes: 18
         run: |
-          echo "a229e926c10bccae3c9ac1cde12eb7ccbf1d47db6c96d7b546a3ce14dbac459e  scripts/probe_ios16_official_client.py" | shasum -a 256 -c -
+          echo "7c421a05444e11c707d2ec574ebdb8a0edec561054a0d6476e11cff40988ef57  scripts/probe_ios16_official_client.py" | shasum -a 256 -c -
           python3 scripts/probe_ios16_official_client.py --reviewed-ephemeral-official-client-probe
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
