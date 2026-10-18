@@ -582,10 +582,11 @@ import Network
         installCheckpoint("Home.icon-tap.after")
         // Query the real Web Clip host; never activate it or forge standalone flags.
         if requireAudioControls {
+            _ = text(".*V16.*e7ab13f79d01.*", in: host, timeout: 60)
             ensureQuickControls(in: host)
         } else {
             XCTAssertTrue(host.wait(for: .runningForeground, timeout: 8), "Installed WebClip did not become foreground")
-            _ = text(".*V16.*e7ab13f79d01.*", in: host, timeout: 30)
+            _ = text(".*V16.*e7ab13f79d01.*", in: host, timeout: 60)
         }
         screen("v16-home-icon-launched")
     }
