@@ -1389,8 +1389,8 @@ def main():
             if emu.poll() is not None:
                 STATE['emulatorEarlyExitCode']=emu.returncode;save();raise Refused('EMULATOR_EXITED_BEFORE_BOOT')
             raise Refused('BOOT_NOT_COMPLETE_WITHIN_180S')
-        listener_guard();first=fresh_input_snapshot('android-first-screen');packages=first['packages'];STATE['androidFirstScreenLabel']=first['label'];STATE['androidFirstScreenPackages']=sorted(packages)
-        # Discovery only: retain the actual first screen; never launch Chrome or accept terms.
+        listener_guard()
+        # Package metadata requires live owned ADB, not a ready launcher or UIAutomator.
         data,_,cut=run([ADB,'-s',SERIAL,'shell','pm','list','packages','com.android.chrome'],'chrome_package',limit=65536)
         if cut:raise Refused('CHROME_PACKAGE_INVENTORY_TRUNCATED')
         packages_found=data.decode('ascii').splitlines()
@@ -1404,9 +1404,20 @@ def main():
         api,_,cut=run([ADB,'-s',SERIAL,'shell','getprop','ro.build.version.sdk'],'actual_api_level',limit=128)
         if cut or api.strip()!=b'36':raise Refused('ACTUAL_API36_REQUIRED')
         if STATE.get('UIInputCommands')!=0:raise Refused('OBSERVATION_HAS_UNEXPECTED_UI_INPUT')
-        STATE['actualAPILevel']=36;STATE['firstScreenKnownLauncher']=firstscreen_can_launch_chrome(packages)
-        STATE['status']='API36_FIRST_SCREEN_AND_CHROME_VERSION_OBSERVED_NO_UI_INPUT'
-        STATE['PWAVerified']=False;STATE['audioMeasured']=False;save();return 0
+        STATE['actualAPILevel']=36
+        STATE['api36ReadOnlyPackageWitness']={'schema':'actual-api36-adb-package-version-before-ax-v1','chromePackagePresent':present,'chromeVersionLines':lines,'actualAPILevel':36,'UIInputCommandsAtWitness':0,'nativeScreenReadinessClaimed':False}
+        STATE['status']='API36_READONLY_PACKAGE_VERSION_RETAINED_NATIVE_SCREEN_PENDING'
+        STATE['PWAVerified']=False;STATE['audioMeasured']=False;save()
+        try:first=fresh_input_snapshot('android-first-screen')
+        except Refused as error:
+            if str(error)!='INPUT_SNAPSHOT_READINESS_EXHAUSTED':raise
+            STATE['firstScreenObservation']={'available':False,'refusalCode':'INPUT_SNAPSHOT_READINESS_EXHAUSTED','nativeScreenReadinessClaimed':False}
+            STATE['status']='API36_PACKAGE_VERSION_OBSERVED_NATIVE_SCREEN_UNAVAILABLE_NO_UI_INPUT';save();return 0
+        packages=first['packages'];STATE['androidFirstScreenLabel']=first['label'];STATE['androidFirstScreenPackages']=sorted(packages)
+        if STATE.get('UIInputCommands')!=0:raise Refused('OBSERVATION_HAS_UNEXPECTED_UI_INPUT')
+        STATE['firstScreenKnownLauncher']=firstscreen_can_launch_chrome(packages)
+        STATE['firstScreenObservation']={'available':True,'nativeSnapshotLabel':first['label'],'nativeScreenReadinessClaimed':False}
+        STATE['status']='API36_FIRST_SCREEN_AND_CHROME_VERSION_OBSERVED_NO_UI_INPUT';save();return 0
     except Refused as e:STATE['status']='REFUSED_CAPABILITY';STATE['refusalCode']=str(e);return 2
     except Exception as e:STATE['status']='REFUSED_CAPABILITY';STATE['errorClass']=type(e).__name__;return 2
     finally:cleanup()

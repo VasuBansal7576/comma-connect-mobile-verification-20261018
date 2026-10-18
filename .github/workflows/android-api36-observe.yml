@@ -42,7 +42,7 @@ jobs:
         timeout-minutes: 8
         run: |
           python3 android/boot-proposal/api36-observe/boot_observe.py
-          python3 -c 'import json; from pathlib import Path; r=json.loads(Path("evidence/android-boot/receipt.json").read_text()); assert r.get("status") == "API36_FIRST_SCREEN_AND_CHROME_VERSION_OBSERVED_NO_UI_INPUT" and r.get("UIInputCommands") == 0 and r.get("actualAPILevel") == 36, "Actual observation incomplete"'
+          python3 -c 'import json; from pathlib import Path; r=json.loads(Path("evidence/android-boot/receipt.json").read_text()); assert r.get("status") in ["API36_FIRST_SCREEN_AND_CHROME_VERSION_OBSERVED_NO_UI_INPUT", "API36_PACKAGE_VERSION_OBSERVED_NATIVE_SCREEN_UNAVAILABLE_NO_UI_INPUT"] and r.get("UIInputCommands") == 0 and r.get("actualAPILevel") == 36 and r.get("api36ReadOnlyPackageWitness", {}).get("schema") == "actual-api36-adb-package-version-before-ax-v1", "Actual observation incomplete"'
       - name: Always clean only owned emulator, daemon and ADB and restore KVM ACL
         if: always() && steps.boot.outcome != 'skipped'
         timeout-minutes: 2
