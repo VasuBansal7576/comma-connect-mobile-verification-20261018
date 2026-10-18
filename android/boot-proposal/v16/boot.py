@@ -1094,8 +1094,8 @@ def observe_installed_pwa_readonly():
     if remaining(60)<60:
         STATE['readonlyInstalledObservation']={'status':'NO_NEW_CDP_READ_INSUFFICIENT_ORIGINAL_CAP'};save();return
     import importlib.util,shutil
-    here=Path(__file__).resolve().parent;bridge=here/'readonly_bridge_v16.py';reader=here/'read_dom_v16.mjs'
-    if hashlib.sha256(bridge.read_bytes()).hexdigest()!='b82f1cc19465fa492d596b97a89a8e0ed27c485789116f410521e4766ca8144e' or hashlib.sha256(reader.read_bytes()).hexdigest()!='d5a6139345fa5df962ca8690842bf0f07d99304ecb474c1ab8ce25866f8153e3':raise Refused('PINNED_READONLY_OBSERVER_REQUIRED')
+    here=Path(__file__).resolve().parent;bridge=here/'readonly_installed_bridge_v16.py';reader=here/'read_dom_v16.mjs';selector=here/'installed_target_selector_v16.py';identity_reader=here/'read_installed_identity_v16.mjs'
+    if hashlib.sha256(bridge.read_bytes()).hexdigest()!='25297da1433072e578d1b64f52eab91732f10adcccd52b9e2b0c37da76950e13' or hashlib.sha256(reader.read_bytes()).hexdigest()!='d5a6139345fa5df962ca8690842bf0f07d99304ecb474c1ab8ce25866f8153e3' or hashlib.sha256(selector.read_bytes()).hexdigest()!='c9d4faedf316cea10fd1a8423b4425574dacaf169b1ac8a54b5a73507797bb1a' or hashlib.sha256(identity_reader.read_bytes()).hexdigest()!='4aa8ff0c57feb24bbec01735bd3f19542586f353e1455af64653d3b43096708a':raise Refused('PINNED_READONLY_OBSERVER_REQUIRED')
     node=shutil.which('node')
     if not node:raise Refused('EXISTING_NODE_REQUIRED_NO_INSTALL')
     spec=importlib.util.spec_from_file_location('owned_readonly_v16',bridge);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
@@ -1105,13 +1105,24 @@ def observe_installed_pwa_readonly():
         data,_,cut=run([ADB]+args,'owned_readonly_adb_'+str(count[0]),timeout=5,limit=1024*1024,retain_stdout=False)
         if cut:raise Refused('READONLY_ADB_BODY_LIMIT')
         return data
-    def http(port,path):remaining(3);return module.local_http_get(port,path)
-    def evaluate(endpoint):
-        data,_,cut=run([node,str(reader),endpoint],'owned_fixed_readonly_dom',timeout=12,limit=32*1024*1024,retain_stdout=False)
+    def http(port,path,seconds=3):return module.local_http_get(port,path,remaining(min(3,seconds)))
+    def evaluate(endpoint,seconds=12):
+        data,_,cut=run([node,str(reader),endpoint],'owned_fixed_readonly_dom',timeout=min(12,seconds),limit=32*1024*1024,retain_stdout=False)
         if cut:raise Refused('READONLY_DOM_BODY_LIMIT')
         return data
+    choice_spec=importlib.util.spec_from_file_location('owned_installed_target_selector_v16',selector);choice=importlib.util.module_from_spec(choice_spec);choice_spec.loader.exec_module(choice)
+    identity_count=[0]
+    def identity_evaluate(endpoint,seconds):
+        identity_count[0]+=1
+        data,_,cut=run([node,str(identity_reader),endpoint],'owned_target_identity_'+str(identity_count[0]),timeout=min(10,seconds),limit=1024*1024,retain_stdout=False)
+        if cut:raise Refused('INSTALLED_TARGET_IDENTITY_BODY_LIMIT')
+        return data
+    def select_installed(version,targets,port,evidence):
+        try:
+            return choice.select(version,targets,port,read_identity=identity_evaluate,read_full=evaluate,list_targets=lambda seconds:module.decode_json(http(port,'/json/list',seconds),1024*1024),decode=module.decode_json,validate_target=module.browser_and_target,validate_full=lambda value:module.validate_observation(value,False),evidence=evidence)
+        except choice.Refused as error:raise module.Refused(str(error))
     listener_guard()
-    result=module.observe_owned_pwa(adb,http,evaluate,OUT/'installed-readonly-v16',owned_vm_guard=True,require_carrier=False)
+    result=module.observe_owned_pwa(adb,http,evaluate,OUT/'installed-readonly-v16',owned_vm_guard=True,require_carrier=False,installed_selector=select_installed)
     STATE['readonlyInstalledObservation']=result
     STATE['installedPWAStandaloneObserved']=result.get('status')=='CURRENT_DOCUMENT_OBSERVATION_RETAINED_NO_CARRIER' and result.get('cleanupVerified') is True
     STATE['status']='STOP_AFTER_ACTUAL_INSTALLED_READONLY_OBSERVATION_NO_AUDIO_VERDICT';save()

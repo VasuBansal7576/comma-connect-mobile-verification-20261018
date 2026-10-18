@@ -3,7 +3,7 @@ from pathlib import Path
 import hashlib,importlib.util,json,os,re,shutil,signal,sys,tempfile,time
 PINS={'android/boot-proposal/v16/boot_browser_audio.py': 'aa5d28bbbcf62956ddf9803e585badc425478e567aa15bddf8029cbd613db414', 'android/boot-proposal/v16/browser_audio_acquire.py': '1ca9653b8393c0d86c590f01371c1351f03a19c763b9f28647818b6a22b72709', 'android/boot-proposal/v16/audio_route_gate.py': '470f16165976a0d08f571dc52be3b728a5bf2c23fa452b546a0ea4fdc4bebcb7', 'audio/native-pulse/routing.py': '9f1a25697b1c145dde14419da577b199c59712feadb191e6d671a75bbc482b59'}
 FLAG='--explicit-private-pulse-windowed-probe'
-PINS.update({'android/boot-proposal/v16/owned_audio_command.py':'d0742eca9f3fd2e743225cf27a02e19f4457c153f44bb913ae644a587333a01b','android/boot-proposal/v16/boot.py':'7be62ba21b1c2ac4dc1f153e37f901ae31ce95bb5f6ac96b822a2d689f4d73c6'})
+PINS.update({'android/boot-proposal/v16/owned_audio_command.py':'9af8002b55555f2c84d777ec0a0615d515753f8aa44350f52e6d3cc575515efb','android/boot-proposal/v16/boot.py':'ef67f711e74f2e6a485551c0f0168b850e38e421bd3e9d092a3082758194c8fd'})
 ENV_KEYS=('PULSE_SERVER','PULSE_SINK','PULSE_SOURCE','XDG_RUNTIME_DIR','DISPLAY','XAUTHORITY')
 class Refused(ValueError):pass
 def need(ok,reason):

@@ -1,6 +1,6 @@
 """Version-bound owned-test harness derivation. Never rewrites the default boot source."""
 import ast,hashlib
-DEFAULT_SHA='7be62ba21b1c2ac4dc1f153e37f901ae31ce95bb5f6ac96b822a2d689f4d73c6'
+DEFAULT_SHA='ef67f711e74f2e6a485551c0f0168b850e38e421bd3e9d092a3082758194c8fd'
 HELPERS='''
 def functional_mode_and_original_args(argv):
     original=[CHROME_TERMS_APPROVAL_FLAG,OWNED_LAB_CONTINUATION_FLAG,OWNED_MENU_OBSERVATION_FLAG,OWNED_ADD_HOME_FLAG,OWNED_INSTALL_OPTION_FLAG,OWNED_CONFIRM_INSTALL_FLAG]

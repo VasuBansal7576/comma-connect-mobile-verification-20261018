@@ -2,7 +2,7 @@
 import hashlib,importlib.util,json,os,signal,subprocess,time
 from pathlib import Path
 HERE=Path(__file__).resolve().parent
-BOOT_OWNERSHIP_SHA='7be62ba21b1c2ac4dc1f153e37f901ae31ce95bb5f6ac96b822a2d689f4d73c6'
+BOOT_OWNERSHIP_SHA='ef67f711e74f2e6a485551c0f0168b850e38e421bd3e9d092a3082758194c8fd'
 def owner_module():
  path=HERE/'boot.py'
  if hashlib.sha256(path.read_bytes()).hexdigest()!=BOOT_OWNERSHIP_SHA:raise ValueError('Exact sealed adjacent boot ownership primitive required')
