@@ -1,0 +1,63 @@
+# PROPOSAL ONLY; no workflow dispatched by this proposal.
+name: V15 installed simulator PWA and native OS output
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  v15-installed-output:
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Existing native output calibration and bounded150s collector
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$(uname -m)" = arm64
+          bash scripts/inventory.sh
+          xcrun swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx15.0 macos/CaptureSystemAudio150.swift -o capture-system-audio150
+          ./capture-system-audio150 preflight > evidence/screen-capture-preflight.json
+          cp capture-system-audio150 capture-system-audio
+          python3 scripts/run_native_calibration.py evidence/native-calibration
+          python3 scripts/assess_pcm.py evidence/native-calibration/system.f32 evidence/native-calibration/capture.json evidence/native-calibration/assessment.json
+      - name: Verify exact public V15 entry and actual manifest identity
+        run: python3 scripts/verify_v15_public_bytes.py
+      - name: Build test-only unsigned UI helper using existing simulator SDK
+        timeout-minutes: 5
+        run: |
+          python3 scripts/generate_v15_project.py
+          simulator=$(python3 scripts/select_simulator.py)
+          echo "SIMULATOR_UDID=$simulator" >> "$GITHUB_ENV"
+          xcrun simctl boot "$simulator"
+          xcrun simctl bootstatus "$simulator" -b
+          open -a Simulator
+          xcodebuild build-for-testing -project CIProbeV15.xcodeproj -scheme CIProbeV15 -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO > evidence/v15-build-ui.log 2>&1
+      - name: Real Safari Add Home and Home icon launch
+        timeout-minutes: 4
+        run: |
+          xcrun simctl openurl "$SIMULATOR_UDID" 'https://comma-connect-fix-lab-20261016.zippy17.chatgpt.site/nqa?candidate=v15&experiment=nqa'
+          xcodebuild test-without-building -project CIProbeV15.xcodeproj -scheme CIProbeV15 -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -derivedDataPath DerivedData -resultBundlePath evidence/v15-install.xcresult -only-testing:CIProbeUITests/V15InstalledUITests/testInstallV15FromSafari CODE_SIGNING_ALLOWED=NO > evidence/v15-install-ui.log 2>&1
+      - name: Native READY/ACK actual V15 protocol and150s system audio
+        timeout-minutes: 6
+        run: python3 scripts/run_v15_capture.py "$SIMULATOR_UDID"
+      - name: Strict finite PCM callback/PTS coverage
+        run: python3 scripts/check_ci_pcm_structure.py evidence/v15-installed-output/system.f32 evidence/v15-installed-output/capture.json evidence/v15-installed-output/pts-coverage.json
+      - name: Cleanup only selected ephemeral simulator
+        if: always() && env.SIMULATOR_UDID != ''
+        run: xcrun simctl shutdown "$SIMULATOR_UDID" || true
+      - name: Export official native XCTest attachments using verified installed CLI
+        if: always()
+        timeout-minutes: 1
+        run: python3 scripts/export_xcresult_attachments.py
+      - name: Retain receipts without product source or local audio playback
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v15-installed-os-output-${{ github.run_id }}
+          path: evidence/
+          retention-days: 3
