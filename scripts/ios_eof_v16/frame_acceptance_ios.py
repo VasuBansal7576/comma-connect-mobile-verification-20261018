@@ -78,14 +78,38 @@ def settled_link(c,start,end,request=None):
   return {'recordIndex':index,'atMs':at,'integratedOwner':c['globalOwner'],'clockOwner':c['owner'],'loadId':c['load'],'frameGeneration':d.get('frameGeneration'),'presentedMediaTime':d['presentedMediaTime']}
  raise Refused('SETTLED_PRODUCT_FRAME_OWNER_LOAD_LINK_UNACQUIRED')
 
+def endpoint_sequence(c, events):
+ # Clock uses a document capture listener; NF uses a later passive target listener.
+ # Pair the complete shared event sequence, not an arbitrary listener latency cap.
+ shared={'loadedmetadata','canplay','playing','seeking','seeked','pause','ended','error'}
+ nf=[e for e in events if e['kind'].startswith('native:') and e['kind'][7:] in shared]
+ need(nf and nf[0]['kind']=='native:loadedmetadata','INITIAL_SHARED_METADATA_EVENT_REQUIRED')
+ rows=c['clock']['records'];previous=None
+ for row in rows:
+  at=num(row['atMs']);need(previous is None or at>=previous,'CLOCK_EVENT_TIME_REVERSED');previous=at
+ matches=[]
+ for start,row in enumerate(rows):
+  if row.get('type')!=nf[0]['kind'][7:] or start+len(nf)>len(rows):continue
+  if any((p.get('native')or{}).get('owner')==c['owner'] and (p.get('native')or{}).get('currentSrc')==c['uri'] for p in rows[:start]):continue
+  block=rows[start:start+len(nf)];ok=True
+  for j,(capture,target) in enumerate(zip(block,nf)):
+   native=capture.get('native')or{};target_at=num(target['atMs']);idx=start+j
+   if capture.get('type')!=target['kind'][7:] or native.get('owner')!=c['owner'] or native.get('currentSrc')!=c['uri'] or capture['atMs']>target_at:ok=False;break
+   # A later native event cannot have entered capture before this target listener.
+   if idx+1<len(rows) and target_at>num(rows[idx+1]['atMs']):ok=False;break
+  if ok:matches.append((start,block))
+ need(len(matches)==1,'UNIQUE_CLOCK_ENDPOINT_LINK_REQUIRED')
+ start,block=matches[0]
+ return {id(target):{'clockRecordIndex':start+j,'clockAtMs':capture['atMs'],'native':capture['native'],'observedListenerDelayMs':target['atMs']-capture['atMs']} for j,(capture,target) in enumerate(zip(block,nf)) if target['kind']=='native:ended'}
+
 def eof_frames(payload,report):
- c=context(payload,report);last=c['last'];need(all(p['clock']['owner']==c['owner']and p['clock']['currentSrc']==c['uri']for p in report['freezes']),'SAME_EOF_CLOCK_ELEMENT_SOURCE_REQUIRED');nfowner=last['native']['owner'];events=[e for e in report['events']if e.get('trusted')is True and e['atMs']<=last['atMs']and(e.get('native')or{}).get('owner')==nfowner];ends=[e for e in events if e['kind']=='native:ended'];need(len(ends)>=3,'THREE_NATIVE_EOFS_PREREQUISITE');cycles=[]
+ c=context(payload,report);last=c['last'];need(all(p['clock']['owner']==c['owner']and p['clock']['currentSrc']==c['uri']for p in report['freezes']),'SAME_EOF_CLOCK_ELEMENT_SOURCE_REQUIRED');nfowner=last['native']['owner'];events=[e for e in report['events']if e.get('trusted')is True and e['atMs']<=last['atMs']and(e.get('native')or{}).get('owner')==nfowner];ends=[e for e in events if e['kind']=='native:ended'];need(len(ends)>=3,'THREE_NATIVE_EOFS_PREREQUISITE');endpoints=endpoint_sequence(c,events);cycles=[]
  for i,end in enumerate(ends):
-  until=ends[i+1]['atMs']if i+1<len(ends)else last['atMs'];matches=[e for e in c['clock']['records']if e['type']=='ended'and e['native']['owner']==c['owner']and 0<=end['atMs']-e['atMs']<5 and e['native']['currentSrc']==c['uri']];need(len(matches)==1,'UNIQUE_CLOCK_ENDPOINT_LINK_REQUIRED');ep=matches[0]['native'];need(ep['paused']is True and ep['error']is None and abs(num(ep['currentTime'])-num(ep['duration']))<.000001,'ACTUAL_CLOCK_EOF_ENDPOINT_REQUIRED')
+  until=ends[i+1]['atMs']if i+1<len(ends)else last['atMs'];endpoint=endpoints[id(end)];ep=endpoint['native'];need(ep['paused']is True and ep['error']is None and abs(num(ep['currentTime'])-num(ep['duration']))<.000001,'ACTUAL_CLOCK_EOF_ENDPOINT_REQUIRED')
   seeked=[e for e in events if end['atMs']<e['atMs']<until and e['kind']=='native:seeked'];need(len(seeked)==1,'ORIGINAL_UNIQUE_SEEKED_PREREQUISITE');plays=[e for e in events if end['atMs']<e['atMs']<until and e['kind']=='native:playing'];need(plays and all(p['native']['paused']is False and p['native']['error']is None and p['native']['src']==c['uri']for p in plays),'NATIVE_PLAYING_PREREQUISITE');start=seeked[0]['atMs'];xs=scoped_frames(c,start,until);proof=progression(xs,minimum=1.001,low=True,high=True);partial=i==len(ends)-1 and proof is None
   if partial:proof=progression(xs,minimum=1.001,low=True);need(proof,'LAST_PARTIAL_EOF_NO_FRAME_PROGRESS')
   else:need(proof,'POST_EOF_LOW_THEN_HIGH_FRAME_PROGRESS_REQUIRED')
-  request=last['driveVideo']['seekRequest'];need(request==report['freezes'][0]['driveVideo']['seekRequest']and request['offset']==1001,'UNCHANGED_EOF_HEAD_REQUEST_REQUIRED');link=settled_link(c,start,until,request);cycles.append({'nativeEOFAtMs':end['atMs'],'frameIntervalEndMs':until,'partialLastInterval':partial,'frameProgress':proof,'settledProductLink':link})
+  request=last['driveVideo']['seekRequest'];need(request==report['freezes'][0]['driveVideo']['seekRequest']and request['offset']==1001,'UNCHANGED_EOF_HEAD_REQUEST_REQUIRED');link=settled_link(c,start,until,request);cycles.append({'nativeEOFAtMs':end['atMs'],'capturePhaseEndpoint':endpoint,'frameIntervalEndMs':until,'partialLastInterval':partial,'frameProgress':proof,'settledProductLink':link})
  complete=[x for x in cycles if not x['partialLastInterval']];need(len(complete)>=3,'THREE_FULLY_RETAINED_EOF_FRAME_PROGRESS_INTERVALS_REQUIRED')
  return {'status':'BOUNDED_IOS_EOF_FRAME_PROGRESS_QUALIFIED','frameAcceptancePending':False,'qualifiedFullPostEOFIntervals':len(complete),'cycles':cycles,'retention':c['retention'],'limits':LIMITS}
 

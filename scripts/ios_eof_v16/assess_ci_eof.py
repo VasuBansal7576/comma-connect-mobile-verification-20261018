@@ -4,7 +4,7 @@ No UI, subprocess, browser, network, device, product or source mutation.
 from pathlib import Path
 import hashlib,importlib.util,json,os,re,sys
 
-PINS={'assess_ios_eof.py':'244293cc0d947d83a5a9ca782fd1b8591ed6323ab8438085b50b71ff10d37679','eof_contract.py':'692d37312b66a2492d2b94d37462e0cc02ad2df817c7443a8ac258cfbd91d3b1','frame_acceptance_ios.py':'3a6bb26178d817efb19f9de8cce9f54d574c5e9f3d41edee3526ee5ab7d4cfa9'}
+PINS={'assess_ios_eof.py':'244293cc0d947d83a5a9ca782fd1b8591ed6323ab8438085b50b71ff10d37679','eof_contract.py':'692d37312b66a2492d2b94d37462e0cc02ad2df817c7443a8ac258cfbd91d3b1','frame_acceptance_ios.py':'0bbaf04d6e392edff29ce5426d9a9a2929b0d5cededae8c7a35fccbe8ad092cd'}
 TEST='V16InstalledUITests/testV16InstalledNaturalEOFContinuation()'
 BUNDLE='evidence/v16-native-eof.xcresult'
 FOLDER='v16-native-eof-attachments'

@@ -715,8 +715,8 @@ import Network
         try audioRevealAndTap("Prepare playback")
         let preparedAX = text("READY: native playing and unmuted\\..*", in: host, timeout: 12).label
         screen("v16-prepared-unmuted")
-        // Collapse original detail to keep quick actions visible and huge later Export text out of AX.
-        nativeSummaryTap("V16 OS audio test", in: host)
+        // Keep the original status detail open through phases. Reopening it after the
+        // 19-second baseline can miss LIVE while native AX scrolling is still running.
         // Actual DOM is <a role="button" aria-label="Close">. Bind observed XCUI semantics.
         let closeCandidates = host.buttons.matching(identifier: "Close").allElementsBoundByIndex + host.links.matching(identifier: "Close").allElementsBoundByIndex
         let actualClose = closeCandidates.filter { $0.exists }
@@ -732,7 +732,7 @@ import Network
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 48), .completed, "Actual Close not observed")
         screen("v16-after-actual-product-close")
         try audioRevealAndTap("Start bare native")
-        audioEnsureStatusOpen()
+        // The original status remains open; query LIVE before doing more layout work.
         _ = text("playlist=PINNED assets=6 bare-native source=LIVE .*", in: host, timeout: 8)
         let cleanupAX = text("playlist=PINNED assets=6 bare-native source=stopped .*cleanup=true", in: host, timeout: 25).label
         screen("v16-source-cleanup")
