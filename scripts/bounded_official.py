@@ -70,9 +70,48 @@ def _execute_owned(command,logpath,limit,term=TERM_SECONDS,reap=KILL_REAP_SECOND
         result['ok']=not result['timedOut']and not result.get('error')and result['cleanup']['returnCode']==0 and result['cleanup']['leaderReaped']and result['cleanup']['ownedGroupAbsent']
     return result
 
+def open_lab_url_with_recovery(udid):
+    # Only this observed openurl exit60 with verified cleanup qualifies for one recovery.
+    command,log,limit=specification('open-lab-url',udid)
+    began=time.monotonic();deadline=began+80;attempts=[]
+    def retain(label,result):
+        attempts.append({'label':label,'result':result})
+        (pathlib.Path('evidence')/('bounded-'+label+'.json')).write_text(json.dumps(result,indent=2)+'\n')
+    def finish(result,code):
+        outer=dict(result)
+        elapsed=time.monotonic()-began
+        if elapsed>80:outer['ok']=False;outer['timedOut']=True;code='RECOVERY_ABSOLUTE_DEADLINE_CROSSED'
+        outer.update({'recoveryCode':code,'recoveryAttempts':attempts,'totalElapsedSeconds':elapsed,'lastCommandElapsedSeconds':result.get('elapsedSeconds'),'elapsedSeconds':elapsed,'startedMonotonic':began,'recoveryAbsoluteLimitSeconds':80,'UIOrTestRetries':0})
+        return outer
+    def remaining_step(cap):
+        return min(cap,deadline-time.monotonic()-TERM_SECONDS-KILL_REAP_SECONDS)
+    first=_execute_owned(command,log,limit);retain('open-lab-url-attempt-1',first)
+    cleanup=first.get('cleanup',{})
+    eligible=first.get('ok') is False and first.get('timedOut') is False and not first.get('error') and cleanup.get('returnCode')==60 and cleanup.get('leaderReaped') is True and cleanup.get('ownedGroupAbsent') is True
+    if not eligible:return finish(first,'NOT_ELIGIBLE_NO_RECOVERY')
+    budget=remaining_step(10)
+    if budget<=0:return finish(first,'RECOVERY_ABSOLUTE_DEADLINE_NO_LAUNCH')
+    launch=_execute_owned(['/usr/bin/xcrun','simctl','launch',udid,'com.apple.mobilesafari'],pathlib.Path('evidence/launch-safari-recovery.log'),budget)
+    retain('launch-safari-recovery',launch)
+    launch_cleanup=launch.get('cleanup',{})
+    launch_ok=launch.get('ok') is True and launch.get('timedOut') is False and not launch.get('error') and launch_cleanup.get('returnCode')==0 and launch_cleanup.get('leaderReaped') is True and launch_cleanup.get('ownedGroupAbsent') is True
+    if not launch_ok:
+        failure=dict(launch);failure['ok']=False
+        return finish(failure,'SAFARI_LAUNCH_FAILED_NO_URL_RETRY')
+    budget=remaining_step(limit)
+    if budget<=0:
+        result=dict(launch);result['ok']=False
+        return finish(result,'RECOVERY_ABSOLUTE_DEADLINE_NO_URL_RETRY')
+    retry=_execute_owned(command,pathlib.Path('evidence/open-lab-url-retry.log'),budget)
+    retain('open-lab-url-attempt-2',retry)
+    if time.monotonic()>deadline:
+        retry=dict(retry);retry['ok']=False
+        return finish(retry,'RECOVERY_ABSOLUTE_DEADLINE_CROSSED')
+    return finish(retry,'ONE_FIXED_URL_RETRY_SUCCEEDED' if retry.get('ok') else 'ONE_FIXED_URL_RETRY_FAILED')
+
 def run_action(action,udid):
     owned_ci(udid);command,log,limit=specification(action,udid)
-    result=_execute_owned(command,log,limit);result.update({'schema':'bounded-fixed-apple-ci-command-v1','operation':action,'selectedSimulatorUDID':udid,'runId':os.environ.get('GITHUB_RUN_ID'),'runAttempt':os.environ.get('GITHUB_RUN_ATTEMPT','1')})
+    result=open_lab_url_with_recovery(udid) if action=='open-lab-url' else _execute_owned(command,log,limit);result.update({'schema':'bounded-fixed-apple-ci-command-v1','operation':action,'selectedSimulatorUDID':udid,'runId':os.environ.get('GITHUB_RUN_ID'),'runAttempt':os.environ.get('GITHUB_RUN_ATTEMPT','1')})
     if action=='list-selected'and result['ok']:
         try:
             if log.stat().st_size>8*1024*1024:raise ValueError('Device listing exceeds bound')

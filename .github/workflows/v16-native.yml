@@ -1,0 +1,107 @@
+name: V16 installed iOS playback, URL and silent system audio evidence
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-evidence:
+    runs-on: macos-15
+    timeout-minutes: 70
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Mandatory stock browser V16 byte gate
+        timeout-minutes: 2
+        run: |
+          mkdir -p evidence
+          node scripts/browser_default_preflight_v16.mjs
+      - name: Qualify existing native output and build bounded150s collector
+        timeout-minutes: 3
+        run: |
+          bash scripts/inventory.sh
+          xcrun swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx15.0 macos/CaptureSystemAudio150.swift -o capture-system-audio150
+          ./capture-system-audio150 preflight > evidence/screen-capture-preflight.json
+          cp capture-system-audio150 capture-system-audio
+          python3 scripts/run_native_calibration.py evidence/native-calibration
+          python3 scripts/assess_pcm.py evidence/native-calibration/system.f32 evidence/native-calibration/capture.json evidence/native-calibration/assessment.json
+      - name: Compose reviewed tests and boot an existing iOS runtime
+        timeout-minutes: 3
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$(uname -m)" = arm64
+          python3 scripts/generate_v16_native_project.py
+          simulator=$(python3 scripts/select_simulator.py)
+          echo "SIMULATOR_UDID=$simulator" >> "$GITHUB_ENV"
+          xcrun simctl boot "$simulator"
+          xcrun simctl bootstatus "$simulator" -b
+          open -a Simulator
+      - name: Build unsigned test-only native continuations
+        timeout-minutes: 5
+        run: xcodebuild build-for-testing -project CIProbeV16.xcodeproj -scheme CIProbeV16 -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -derivedDataPath DerivedData ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO > evidence/v16-native-build.log 2>&1
+      - name: Real Safari Add Home and installed icon launch
+        id: install
+        timeout-minutes: 12
+        run: |
+          python3 scripts/bounded_official_v16.py open-lab-url "$SIMULATOR_UDID"
+          python3 scripts/bounded_official_v16.py install "$SIMULATOR_UDID"
+      - name: Actual natural EOF continuation (transport classified from source)
+        if: always() && steps.install.outcome == 'success'
+        timeout-minutes: 8
+        run: python3 scripts/bounded_official_v16.py native-eof "$SIMULATOR_UDID"
+      - name: Actual native failure branch or explicit unacquired evidence
+        if: always() && steps.install.outcome == 'success'
+        timeout-minutes: 8
+        run: python3 scripts/bounded_official_v16.py native-failure "$SIMULATOR_UDID"
+      - name: Actual installed URL history, reload and settings continuation
+        if: always() && steps.install.outcome == 'success'
+        timeout-minutes: 11
+        run: python3 scripts/bounded_official_v16.py native-url "$SIMULATOR_UDID"
+      - name: Native READY/ACK actual V16 protocol and150s system audio
+        id: audio
+        if: always() && steps.install.outcome == 'success'
+        timeout-minutes: 9
+        run: python3 scripts/run_v16_capture.py "$SIMULATOR_UDID"
+      - name: Strict finite PCM callback/PTS coverage
+        if: always() && steps.audio.outcome == 'success'
+        timeout-minutes: 1
+        run: python3 scripts/check_ci_pcm_structure.py evidence/v16-installed-output/system.f32 evidence/v16-installed-output/capture.json evidence/v16-installed-output/pts-coverage.json
+      - name: Preserve selected simulator screen
+        if: always() && env.SIMULATOR_UDID != ''
+        timeout-minutes: 1
+        run: python3 scripts/bounded_official_v16.py screenshot "$SIMULATOR_UDID" || true
+      - name: Shut down only selected simulator
+        if: always() && env.SIMULATOR_UDID != ''
+        timeout-minutes: 1
+        run: |
+          python3 scripts/bounded_official_v16.py shutdown "$SIMULATOR_UDID" || true
+          python3 scripts/bounded_official_v16.py list-selected "$SIMULATOR_UDID"
+      - name: Export official native attachments (integrity still assessed offline)
+        if: always()
+        timeout-minutes: 4
+        run: python3 scripts/export_xcresult_attachments_v16.py
+      - name: Retain stable native evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v16-installed-native-${{ github.run_id }}
+          path: |
+            evidence/*.json
+            evidence/*.log
+            evidence/*.txt
+            evidence/*.png
+            evidence/v16-*-attachments/
+            evidence/native-calibration/
+            evidence/v16-installed-output/
+          retention-days: 3
+      - name: Optional raw Xcode bundles
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v16-native-raw-${{ github.run_id }}
+          path: evidence/*.xcresult/
+          retention-days: 3
