@@ -65,12 +65,31 @@ def resolve(xml,png,label):
    r=rect(other)
    if r and any(r[0]<=sx<r[2]and r[1]<=py<r[3]for py in [sy,ey]):raise Refused('NATIVE_SCROLL_ENDPOINT_OCCLUDED')
   return {'kind':'scroll','label':label,'scrollBounds':sr,'x':sx,'fromY':sy,'toY':ey,'screen':[w,h]}
- family=set(chain(target))|set(target.iter())
+ family=set(chain(target))|set(target.iter());blockers=[]
  for other in nodes:
   if other in family or list(other)or not eligible(other)or observed_compositor_background(other):continue
   r=rect(other)
-  if r and r[0]<=x<r[2]and r[1]<=y<r[3]:raise Refused('NATIVE_AUDIO_TARGET_OCCLUDED_OR_UNKNOWN_OVERLAP')
- return {'kind':'tap','label':label,'x':x,'y':y,'labelBounds':[a,b,c,d],'clickableBounds':[ta,tb,tc,td],'screen':[w,h],'package':app[0],'nativeClassObserved':target.get('class'),'documentOrder':positions[id(target)]}
+  if r and max(a,r[0])<min(c,r[2])and max(b,r[1])<min(d,r[3]):blockers.append(r)
+ avoided=False
+ if any(r[0]<=x<r[2]and r[1]<=y<r[3]for r in blockers):
+  # Do not ignore an overlapping leaf. Find an interior portion of this fresh
+  # native Button rectangle outside every unrelated observed leaf rectangle.
+  if target.get('class')!='android.widget.Button':raise Refused('NATIVE_AUDIO_TARGET_OCCLUDED_OR_UNKNOWN_OVERLAP')
+  free=[(a,b,c,d)]
+  for left,top,right,bottom in blockers:
+   next_free=[]
+   for aa,bb,cc,dd in free:
+    il,it,ir,ib=max(aa,left),max(bb,top),min(cc,right),min(dd,bottom)
+    if il>=ir or it>=ib:next_free.append((aa,bb,cc,dd));continue
+    next_free.extend(r for r in [(aa,bb,il,dd),(ir,bb,cc,dd),(il,bb,ir,it),(il,ib,ir,dd)]if r[2]-r[0]>=3 and r[3]-r[1]>=3)
+   if len(next_free)>128:raise Refused('NATIVE_CLEAR_POINT_PARTITION_LIMIT')
+   free=next_free
+  candidates=sorted(free,key=lambda r:-(r[2]-r[0])*(r[3]-r[1]))
+  if not candidates:raise Refused('NATIVE_AUDIO_TARGET_OCCLUDED_OR_UNKNOWN_OVERLAP')
+  aa,bb,cc,dd=candidates[0];x,y=(aa+cc)//2,(bb+dd)//2
+  if not(a<x<c and b<y<d and ta<x<tc and tb<y<td)or any(r[0]<=x<r[2]and r[1]<=y<r[3]for r in blockers):raise Refused('NATIVE_AUDIO_TARGET_OCCLUDED_OR_UNKNOWN_OVERLAP')
+  avoided=True
+ return {'kind':'tap','label':label,'x':x,'y':y,'labelBounds':[a,b,c,d],'clickableBounds':[ta,tb,tc,td],'screen':[w,h],'package':app[0],'nativeClassObserved':target.get('class'),'documentOrder':positions[id(target)],'avoidedObservedLeafRectangles':avoided}
 
 class Sequence:
  ORDER=['Pin actual playlist','Prepare playback','Start pilot and run','Start bare native','Export all','Freeze','Pack frozen witness']
