@@ -11,7 +11,7 @@ TOTAL_SECONDS=1020
 CLIENT_SECONDS=720
 DEVELOPER='/Applications/Xcode_16.4.app/Contents/Developer'
 OFFICIAL_URI='https://download.developer.apple.com/Developer_Tools/iOS_16.4_Simulator_Runtime/iOS_16.4_Simulator_Runtime.dmg'
-R={'schema':'exact-ios16-official-client-probe-v1','status':'NOT_STARTED','requestedVersion':'16.4','requestedBuild':'20E247','expectedArchiveBytes':EXPECTED_SIZE,'officialIndexURI':OFFICIAL_URI,'agreementAcceptedByScript':False,'accountInputByScript':False,'runtimeUsableVerified':False,'nativeHTTPVerified':False,'commands':[]}
+R={'schema':'exact-ios16-official-client-probe-v1','status':'NOT_STARTED','requestedVersion':'16.4','requestedBuild':'20E247','expectedArchiveBytes':EXPECTED_SIZE,'officialIndexURI':OFFICIAL_URI,'agreementAcceptedByScript':False,'accountInputByScript':False,'runtimeUsableVerified':False,'nativeHTTPVerified':False,'installedRuntimeState':'UNKNOWN_NOT_INVENTORIED','commands':[]}
 START=None
 
 class Refused(Exception):pass
@@ -126,13 +126,11 @@ def main():
         if version.strip()!='Xcode 16.4\nBuild version 16F6':raise Refused('EXACT_XCODE164_BUILD_REQUIRED')
         require_help(execute('actual-help',['/usr/bin/xcodebuild','-help'],20))
         execute('existing-firstlaunch-status',['/usr/bin/xcodebuild','-checkFirstLaunchStatus'],20)
-        before=execute('runtimes-before',['/usr/bin/xcrun','simctl','list','runtimes','--json'],20);json.loads(before)
         export=(OUT/'export').resolve();export.mkdir(exist_ok=False);owned_export=True
         if shutil.disk_usage(OUT).free<MIN_FREE:raise Refused('DISK_FREE_FLOOR')
         R['status']='ONE_OFFICIAL_CLIENT_OPERATION';R['scope']='May download, install and export exact20E247; no consent/account response, runtime import, boot or product test is requested.';save()
         execute('exact-client-operation',fixed_command(export),CLIENT_SECONDS,export)
         R['status']='CLIENT_EXIT_ZERO_ARCHIVE_NOT_YET_QUALIFIED';save()
-        after=execute('runtimes-after',['/usr/bin/xcrun','simctl','list','runtimes','--json'],20);json.loads(after)
         files=[p for p in export.rglob('*')if p.is_file()]
         if len(files)!=1 or files[0].suffix.lower()!='.dmg'or files[0].stat().st_size!=EXPECTED_SIZE:raise Refused('EXACT_ORIGINAL_ARCHIVE_SHAPE_SIZE_REQUIRED')
         digest=hashlib.sha256()
