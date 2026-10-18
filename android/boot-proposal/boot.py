@@ -68,6 +68,69 @@ def process_ticks(pid):
     try:return Path('/proc/'+str(pid)+'/stat').read_text().split(') ',1)[1].split()[19]
     except (OSError,IndexError):return None
 
+def group_member(pid,proc_root=Path('/proc')):
+    # Retain only OS identity/ownership fields, never argv, environment or process names.
+    directory=proc_root/str(pid)
+    data=(directory/'stat').read_bytes()
+    if len(data)>4096:raise ValueError('BOUNDED_PROC_STAT_REQUIRED')
+    lead,fields=data.decode('utf-8').rsplit(') ',1);fields=fields.split()
+    if int(lead.split(' (',1)[0])!=pid:raise ValueError('PROC_PID_IDENTITY_REQUIRED')
+    if fields[0] not in ['R','S','D','Z','T','t','X','x','K','W','P','I'] or not fields[19].isdecimal():raise ValueError('PROC_IDENTITY_FIELDS_REQUIRED')
+    return {'pid':pid,'ppid':int(fields[1]),'pgid':int(fields[2]),'sid':int(fields[3]),'state':fields[0],'startTicks':fields[19],'uid':directory.stat().st_uid}
+
+def group_snapshot(pgid,proc_root=Path('/proc')):
+    members=[];complete=True;count=0
+    try:
+        for entry in proc_root.iterdir():
+            if not entry.name.isdecimal():continue
+            count+=1
+            if count>8192:complete=False;break
+            try:member=group_member(int(entry.name),proc_root)
+            except FileNotFoundError:continue
+            except (OSError,ValueError,IndexError,UnicodeError):complete=False;continue
+            if member['pgid']==pgid:
+                if len(members)>=128:complete=False;break
+                members.append(member)
+    except OSError:complete=False
+    return {'complete':complete,'scannedPIDs':count,'members':sorted(members,key=lambda m:m['pid'])}
+
+def same_group_identity(a,b):
+    return all(a.get(k)==b.get(k) for k in ['pid','startTicks','pgid','sid','uid'])
+
+def bound_group_anchor(row,snapshot):
+    provenance=row.get('ownedGroupProvenance',{})
+    if not provenance.get('complete') or not snapshot.get('complete'):return None
+    members=snapshot['members'];pid=row['pid'];uid=os.getuid()
+    if not members or any(m['pgid']!=pid or m['sid']!=pid or m['uid']!=uid for m in members):return None
+    for member in members:
+        if member['state'] not in ['Z','X','x'] and any(same_group_identity(member,old) for old in provenance['members']):
+            try:fresh=group_member(member['pid'])
+            except (OSError,ValueError,IndexError,UnicodeError):continue
+            if fresh['state'] not in ['Z','X','x'] and same_group_identity(member,fresh):return fresh
+    return None
+
+def finish_owned_group(row,result):
+    # A surviving bound descendant can prove group continuity after its original leader exits.
+    result['descendantGroupSignals']=[]
+    for sig in [signal.SIGTERM,signal.SIGKILL]:
+        snapshot=group_snapshot(row['pid']);anchor=bound_group_anchor(row,snapshot)
+        if anchor is None:break
+        try:os.killpg(row['pid'],sig)
+        except ProcessLookupError:break
+        except PermissionError:result['descendantSignalRefused']='PERMISSION_DENIED';break
+        result['descendantGroupSignals'].append({'signal':int(sig),'anchorPID':anchor['pid'],'anchorStartTicks':anchor['startTicks']})
+        until=time.monotonic()+1.5
+        while time.monotonic()<until:
+            current=group_snapshot(row['pid'])
+            if current['complete'] and not any(m['state'] not in ['Z','X','x'] for m in current['members']):break
+            time.sleep(.1)
+    final=group_snapshot(row['pid']);result['finalGroupSnapshot']=final
+    if not final['complete']:classification='UNKNOWN_INCOMPLETE_SCAN'
+    elif not final['members']:classification='NO_MEMBERS_OBSERVED_REQUIRES_GROUP_ABSENCE_CHECK'
+    elif all(m['state'] in ['Z','X','x'] for m in final['members']):classification='INERT_ZOMBIE_ONLY_OBSERVED_NOT_ABSENT'
+    else:classification='LIVE_MEMBERS_OBSERVED'
+    result['finalGroupClassification']=classification
+
 def own_process(args,kind,env=None):
     # Foreground children only. No daemon pid discovery or broad process-name killing.
     log=open(OUT/(kind+'-private.raw'),'wb')
@@ -79,8 +142,13 @@ def cleanup():
     results=[]
     for row in reversed(STATE.get('children',[])):
         pid=row['pid'];matched=bool(row.get('startTicks') and process_ticks(pid)==row['startTicks'])
-        try:group_matches=matched and os.getpgid(pid)==pid
+        try:group_matches=matched and os.getpgid(pid)==pid and os.getsid(pid)==pid
         except ProcessLookupError:group_matches=False
+        if group_matches:
+            snapshot=group_snapshot(pid)
+            leaders=[m for m in snapshot['members'] if m['pid']==pid and m['startTicks']==row['startTicks'] and m['sid']==pid and m['uid']==os.getuid()]
+            group_matches=snapshot['complete'] and len(leaders)==1 and all(m['sid']==pid and m['uid']==os.getuid() for m in snapshot['members'])
+            if group_matches:row['ownedGroupProvenance']=snapshot
         if group_matches:
             try:os.killpg(pid,signal.SIGTERM)
             except ProcessLookupError:pass
@@ -112,6 +180,7 @@ def cleanup():
         log.close()
     # Final readback follows bounded termination and CHILDREN.wait/reap, not the pre-reap state.
     for row,result in zip(reversed(STATE.get('children',[])),results):
+        finish_owned_group(row,result)
         pid=row['pid'];bound=row.get('startTicks');ticks=process_ticks(pid);reused=bool(bound and ticks and ticks!=bound)
         if ticks is not None:pid_present=True
         else:
@@ -124,7 +193,7 @@ def cleanup():
             try:os.killpg(pid,0);group_present=True
             except ProcessLookupError:group_present=False
             except PermissionError:group_present=None
-        verified=bool(bound and same is False and pid_present is False and group_present is False and not reused)
+        verified=bool(bound and same is False and pid_present is False and group_present is False and not reused and result['finalGroupSnapshot']['complete'] and not result['finalGroupSnapshot']['members'])
         result.update({'sameProcessStillPresent':same,'pidStillPresent':pid_present,'pidReusedBeforeFinalReadback':reused,'ownedProcessGroupStillPresent':group_present,'exitAndGroupAbsenceVerified':verified,'readbackAfterBoundedReap':True})
     STATE['ownedChildCleanupVerified']=all(result['exitAndGroupAbsenceVerified'] for result in results)
     STATE['ownedChildCleanupStatus']='VERIFIED_EXIT_AND_GROUP_ABSENCE' if STATE['ownedChildCleanupVerified'] else 'UNVERIFIED_OR_STILL_PRESENT'
@@ -189,7 +258,10 @@ def fresh_input_snapshot(label):
         complete=time.monotonic()
         if complete<capture_start or complete>=deadline:
             item['status']='READINESS_DEADLINE_CROSSED';save();raise Refused('INPUT_SNAPSHOT_READINESS_DEADLINE')
-        item['status']='FRESH_SNAPSHOT_RETAINED';item['captureCompleteBootSeconds']=complete-START;row['successfulLabel']=actual_label;save()
+        item['captureCompleteBootSeconds']=complete-START;item['ageAtCompletionSeconds']=complete-capture_start
+        if complete-capture_start>10:
+            item['status']='FRESH_BUT_AGED_OUT_NO_INPUT';save();continue
+        item['status']='FRESH_SNAPSHOT_RETAINED';row['successfulLabel']=actual_label;save()
         return {'label':actual_label,'captureStartMonotonic':capture_start,'captureCompleteMonotonic':complete,'packages':packages}
     row['status']='EXHAUSTED_NO_INPUT_PERMITTED';save();raise Refused('INPUT_SNAPSHOT_READINESS_EXHAUSTED')
 
