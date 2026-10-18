@@ -297,6 +297,30 @@ def screen(label, observation_deadline=None):
     if xml_failure:raise xml_failure
     return {e.get('package') for e in tree.iter() if e.get('package')}
 
+def observe_initial_screen():
+    # Passive package classification cannot authorize a native input. The first
+    # actual input always acquires its own strict fresh launcher-icon pair.
+    began=time.monotonic();deadline=min(began+30,START+CAP)
+    row={'scope':'PASSIVE_PACKAGE_CLASSIFICATION_ONLY','inputEligible':False,'deadlineBootSeconds':deadline-START,'attempts':[]}
+    STATE['passiveInitialScreenReadiness']=row;save()
+    transient={'UI_DUMP_REPORTED_ERROR','UI_DUMP_SUCCESS_MARKER_REQUIRED','UI_XML_INVALID','OWN_COMMAND_FAILED_ui_dump','OWN_COMMAND_FAILED_ui_xml','OWN_COMMAND_TIMEOUT_ui_dump','OWN_COMMAND_TIMEOUT_ui_xml','OWN_COMMAND_TIMEOUT_screen_png','CHROME_SCREEN_OBSERVATION_DEADLINE'}
+    for attempt in range(1,4):
+        capture_start=time.monotonic()
+        if capture_start>=deadline:break
+        label='android-first-screen-observation-'+str(attempt)
+        item={'attempt':attempt,'label':label,'captureStartBootSeconds':capture_start-START,'inputEligible':False};row['attempts'].append(item)
+        try:packages=screen(label,observation_deadline=deadline)
+        except Refused as error:
+            if str(error)not in transient:raise
+            item.update(status='PASSIVE_PAIR_UNAVAILABLE',code=str(error));save();continue
+        complete=time.monotonic()
+        if complete<capture_start or complete>=deadline:
+            item['status']='PASSIVE_OBSERVATION_DEADLINE_CROSSED';save();raise Refused('PASSIVE_INITIAL_SCREEN_DEADLINE')
+        item.update(captureCompleteBootSeconds=complete-START,captureAgeSeconds=complete-capture_start,status='PASSIVE_PAIR_RETAINED_NOT_INPUT_ELIGIBLE')
+        row['successfulLabel']=label;save()
+        return {'label':label,'packages':packages,'inputEligible':False}
+    row['status']='PASSIVE_OBSERVATION_EXHAUSTED_NO_INPUT';save();raise Refused('PASSIVE_INITIAL_SCREEN_EXHAUSTED')
+
 def fresh_input_snapshot(label,require_chrome_icon=False):
     if not re.fullmatch(r'[a-z0-9-]+',label):raise Refused('OWN_INPUT_SNAPSHOT_LABEL_REQUIRED')
     if require_chrome_icon and label!='android-pre-chrome-launch':raise Refused('EXACT_INITIAL_CHROME_READINESS_SCOPE_REQUIRED')
@@ -1419,7 +1443,7 @@ def main():
             if emu.poll() is not None:
                 STATE['emulatorEarlyExitCode']=emu.returncode;save();raise Refused('EMULATOR_EXITED_BEFORE_BOOT')
             raise Refused('BOOT_NOT_COMPLETE_WITHIN_180S')
-        listener_guard();first=fresh_input_snapshot('android-first-screen');packages=first['packages'];STATE['androidFirstScreenLabel']=first['label'];STATE['androidFirstScreenPackages']=sorted(packages)
+        listener_guard();first=observe_initial_screen();packages=first['packages'];STATE['androidFirstScreenLabel']=first['label'];STATE['androidFirstScreenPackages']=sorted(packages)
         if not firstscreen_can_launch_chrome(packages):STATE['status']='STOP_ANDROID_FIRST_RUN_OR_NONLAUNCHER_UI_REQUIRES_REVIEW';return 0
         data,_,_=run([ADB,'-s',SERIAL,'shell','pm','list','packages','com.android.chrome'],'chrome_package')
         if b'package:com.android.chrome' not in data:raise Refused('ANDROID_CHROME_NOT_PRESENT')

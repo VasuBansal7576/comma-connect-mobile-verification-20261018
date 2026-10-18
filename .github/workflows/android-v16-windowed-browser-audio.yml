@@ -33,7 +33,7 @@ jobs:
       - name: Exact reviewed windowed browser dependency closure before SDK or emulator
         timeout-minutes: 1
         run: |
-          echo 'e579f03e249652c61a034c100ffe8aaeb8fd93b780720ce12833f81924d8bbd9  android/boot-proposal/v16/run_windowed_browser_audio.py' | sha256sum -c -
+          echo 'ccabbdff459286b21a02aeb99e0cbb9cc4aace468ee7961419312f397e76c5fe  android/boot-proposal/v16/run_windowed_browser_audio.py' | sha256sum -c -
           python3 android/boot-proposal/v16/run_windowed_browser_audio.py --verify-source-only
       - name: Existing Node read-only CDP capability before SDK or emulator
         timeout-minutes: 2
