@@ -1,0 +1,133 @@
+# Explicit manual V16 installed-PWA observation; original V16 workflow remains separate.
+name: Hosted V16 Android installed PWA evidence
+on:
+  workflow_dispatch:
+    inputs:
+      owner_reviewed_remote_prerequisites:
+        type: boolean
+        default: false
+        description: Provision only accepted stable SDK packages and Ubuntu audio tools on this ephemeral VM
+      approve_chrome_124_terms_without_account:
+        type: boolean
+        default: false
+        description: Requires human approval to accept exact Chrome124 welcome Terms with the displayed data-reporting disclosure
+      continue_to_owned_v16_lab:
+        type: boolean
+        default: false
+        description: Acknowledge reviewed nonbinding ad-privacy notice and navigate only the public V16 lab; capture and stop
+      observe_owned_v16_chrome_menu:
+        type: boolean
+        default: false
+        description: Open only the observed native Chrome menu on the owned V16 page; capture and stop before install
+      observe_owned_v16_add_home_dialog:
+        type: boolean
+        default: false
+        description: Tap the reviewed Add Home menu row and capture the resulting dialog; stop before confirmation
+      observe_owned_v16_install_option_dialog:
+        type: boolean
+        default: false
+        description: Tap the observed native Install option and retain the next dialog; stop before final confirmation
+      confirm_owned_v16_install_and_observe:
+        type: boolean
+        default: false
+        description: Confirm only the observed owned V16 PWA install and inspect its native Home launch and real standalone document
+permissions:
+  contents: read
+jobs:
+  prerequisites:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Actual owned Linux late-descendant adoption and exact-child reap
+        if: inputs.owner_reviewed_remote_prerequisites
+        run: |
+          mkdir -p evidence
+          python3 android/boot-proposal/v16/linux_subreaper_probe.py --owned-linux-capability-probe > evidence/linux-subreaper-probe.json
+      - name: Fresh installed SDK parser evidence only
+        run: python3 android/boot-proposal/license-probe/probe.py
+      - name: Bind exact already-accepted stable channel/revision rows
+        run: python3 android/boot-proposal/guard.py evidence/android-license-parser/receipt.json evidence/android-stable-setup/plan.json
+      - name: Stable SDK installation with EOF, no license acceptance
+        id: sdk_install
+        if: inputs.owner_reviewed_remote_prerequisites
+        run: python3 android/boot-proposal/run-bounded.py sdk
+      - name: Check installed revisions and unchanged SDK license files even after installer failure
+        if: always() && inputs.owner_reviewed_remote_prerequisites && steps.sdk_install.outcome != 'skipped'
+        run: python3 android/boot-proposal/verify-installed.py
+      - name: Official Ubuntu prerequisite package index
+        if: inputs.owner_reviewed_remote_prerequisites
+        run: python3 android/boot-proposal/run-bounded.py apt-update
+      - name: Explicit Ubuntu FLOSS audio and ACL dependencies
+        if: inputs.owner_reviewed_remote_prerequisites
+        run: python3 android/boot-proposal/run-bounded.py apt-install
+      - name: Owned silent V16 Android install and standalone observation
+        id: boot
+        if: inputs.owner_reviewed_remote_prerequisites
+        env:
+          CHROME_TERMS_APPROVED: ${{ inputs.approve_chrome_124_terms_without_account }}
+          OWNED_LAB_CONTINUATION: ${{ inputs.continue_to_owned_v16_lab }}
+          OBSERVE_OWNED_MENU: ${{ inputs.observe_owned_v16_chrome_menu }}
+          OBSERVE_ADD_HOME: ${{ inputs.observe_owned_v16_add_home_dialog }}
+          OBSERVE_INSTALL_OPTION: ${{ inputs.observe_owned_v16_install_option_dialog }}
+          CONFIRM_OWNED_INSTALL: ${{ inputs.confirm_owned_v16_install_and_observe }}
+        run: |
+          if [ "$CONFIRM_OWNED_INSTALL" = true ] && [ "$OBSERVE_INSTALL_OPTION" != true ]; then
+            echo 'Final owned install requires all prior reviewed observation inputs.'
+            exit 2
+          fi
+          if [ "$OBSERVE_INSTALL_OPTION" = true ] && [ "$OBSERVE_ADD_HOME" != true ]; then
+            echo 'Install option requires the reviewed Add Home continuation.'
+            exit 2
+          fi
+          if [ "$OBSERVE_ADD_HOME" = true ] && { [ "$OBSERVE_OWNED_MENU" != true ] || [ "$OWNED_LAB_CONTINUATION" != true ] || [ "$CHROME_TERMS_APPROVED" != true ]; }; then
+            echo 'Add Home observation requires all prior reviewed continuation inputs.'
+            exit 2
+          fi
+          if [ "$OBSERVE_OWNED_MENU" = true ] && [ "$OWNED_LAB_CONTINUATION" != true ]; then
+            echo 'Menu observation requires the explicit owned lab continuation.'
+            exit 2
+          fi
+          if [ "$CONFIRM_OWNED_INSTALL" = true ]; then
+            python3 android/boot-proposal/v16/boot.py --approve-chrome-124-terms-without-account --continue-owned-v16-lab-after-privacy-notice --observe-owned-v16-chrome-menu --observe-owned-v16-add-home-dialog --observe-owned-v16-install-option-dialog --confirm-owned-v16-install-and-observe
+          elif [ "$OBSERVE_INSTALL_OPTION" = true ]; then
+            python3 android/boot-proposal/v16/boot.py --approve-chrome-124-terms-without-account --continue-owned-v16-lab-after-privacy-notice --observe-owned-v16-chrome-menu --observe-owned-v16-add-home-dialog --observe-owned-v16-install-option-dialog
+          elif [ "$OBSERVE_ADD_HOME" = true ]; then
+            python3 android/boot-proposal/v16/boot.py --approve-chrome-124-terms-without-account --continue-owned-v16-lab-after-privacy-notice --observe-owned-v16-chrome-menu --observe-owned-v16-add-home-dialog
+          elif [ "$CHROME_TERMS_APPROVED" = true ] && [ "$OWNED_LAB_CONTINUATION" = true ] && [ "$OBSERVE_OWNED_MENU" = true ]; then
+            python3 android/boot-proposal/v16/boot.py --approve-chrome-124-terms-without-account --continue-owned-v16-lab-after-privacy-notice --observe-owned-v16-chrome-menu
+          elif [ "$CHROME_TERMS_APPROVED" = true ] && [ "$OWNED_LAB_CONTINUATION" = true ]; then
+            python3 android/boot-proposal/v16/boot.py --approve-chrome-124-terms-without-account --continue-owned-v16-lab-after-privacy-notice
+          elif [ "$CHROME_TERMS_APPROVED" = true ]; then
+            python3 android/boot-proposal/v16/boot.py --approve-chrome-124-terms-without-account
+          elif [ "$OWNED_LAB_CONTINUATION" = true ]; then
+            echo 'Owned lab continuation requires the explicitly approved welcome action first.'
+            exit 2
+          else
+            python3 android/boot-proposal/v16/boot.py
+          fi
+      - name: Always clean bound owned processes and restore KVM ACL
+        if: always() && inputs.owner_reviewed_remote_prerequisites && steps.boot.outcome != 'skipped'
+        run: |
+          python3 android/boot-proposal/v16/boot.py --cleanup
+          python3 -c 'import json; from pathlib import Path; r=json.loads(Path("evidence/android-boot/receipt.json").read_text()); assert r.get("ownedChildCleanupVerified") is True and r.get("KVMACLChanged") is False and r.get("ownedADBServerCleanupExitCode") == 0, "Final owned-process, ADB and KVM cleanup is unverified"'
+      - name: Retain prerequisite receipts, selected UI and bounded sanitized logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-v16-installed-${{ github.run_id }}
+          path: |
+            evidence/linux-subreaper-probe.json
+            evidence/android-license-parser/receipt.json
+            evidence/android-license-parser/sdk-result.json
+            evidence/android-license-parser/*-diagnostic.txt
+            evidence/android-stable-setup/plan.json
+            evidence/android-stable-setup/post-install.json
+            evidence/android-boot/**/*.json
+            evidence/android-boot/*.png
+            evidence/android-boot/*.xml
+            evidence/android-boot/*.log
+          retention-days: 3
+          if-no-files-found: error
