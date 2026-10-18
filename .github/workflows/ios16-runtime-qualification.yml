@@ -18,7 +18,7 @@ jobs:
         run: |
           python3 - <<'PYCODE'
           import hashlib,pathlib
-          assert hashlib.sha256(pathlib.Path('scripts/qualify_ios16_runtime.py').read_bytes()).hexdigest() == '0b8e45b413f6e10820df79182de233632f4d087866ba6bebe8af54b735d7b935'
+          assert hashlib.sha256(pathlib.Path('scripts/qualify_ios16_runtime.py').read_bytes()).hexdigest() == '3fe87c963ed4a22ecb68ace5af637661613c176a9add5963101320dd5909bc4f'
           assert hashlib.sha256(pathlib.Path('scripts/probe_ios16_official_client.py').read_bytes()).hexdigest() == '77821ad5b2066b8dd732463849b442c71e84237adfe084a721f2e5d04253f5a4'
           PYCODE
           python3 scripts/qualify_ios16_runtime.py --reviewed-ephemeral-ios16-qualification

@@ -208,6 +208,40 @@ def cleanup_device():
     except Refused as error:R['ownedDeviceCleanupStatus']='NOT_VERIFIED_EPHEMERAL_TEARDOWN_REQUIRED';R['cleanupDevice']['readbackRefusal']=str(error)
     save()
 
+def boot_failure_diagnostics():
+    # Observation only after the original bootstatus deadline; never retry boot.
+    trigger=R.get('commands',[])[-1]if R.get('commands')else{}
+    if (R.get('phase')!='bootstatus-own-device'or R.get('refusalCode')!='ABSOLUTE_DEADLINE'
+        or trigger.get('qualificationPhase')!='bootstatus-own-device'or trigger.get('refusalCode')!='ABSOLUTE_DEADLINE'
+        or not SAFE or not uuid_text(OWNED_UUID)or R.get('creation',{}).get('outcome')!='EXACT_NEW_DEVICE_BOUND'
+        or R.get('creation',{}).get('udid')!=OWNED_UUID):return
+    began=time.monotonic();finish=min(began+45,START+900)
+    result={'trigger':'ORIGINAL_BOOTSTATUS_ABSOLUTE_DEADLINE','udid':OWNED_UUID,'observationOnly':True,'runtimeCompatibilityVerdict':'UNKNOWN','operations':[]}
+    R['bootFailureDiagnostics']=result;save()
+    def read(label,args,seconds):
+        left=finish-time.monotonic()-9
+        if not SAFE or left<=0:
+            result['operations'].append({'label':label,'status':'SKIPPED_DIAGNOSTIC_DEADLINE_OR_UNVERIFIED_PRIOR_CLEANUP'});save();return None
+        try:
+            text=call(label,args,min(seconds,left));result['operations'].append({'label':label,'status':'COMPLETE_ORIGINAL_OUTPUT_RETAINED'});save();return text
+        except Refused as error:
+            result['operations'].append({'label':label,'status':'REFUSED_OR_INCOMPLETE','code':str(error)});save();return None
+    version=read('diagnostic-host-version',['/usr/bin/sw_vers','-productVersion'],5)
+    if version is not None and re.fullmatch(r'\d+(?:\.\d+){1,2}',version.strip()):result['hostVersion']=version.strip();save()
+    ids=read('diagnostic-process-ids',['/usr/bin/pgrep','-x','CoreSimulatorService|com.apple.CoreSimulator.CoreSimulatorService|launchd_sim|Simulator|diskimagesiod'],5)
+    if ids is not None:
+        values=ids.split()
+        if 0<len(values)<=64 and len(set(values))==len(values)and all(re.fullmatch(r'[1-9]\d{0,8}',v)for v in values):
+            read('diagnostic-process-status',['/bin/ps','-p',','.join(values),'-o','pid=,ppid=,pgid=,stat=,etime=,comm='],5)
+        else:result['operations'].append({'label':'diagnostic-process-status','status':'PID_SCHEMA_REFUSED'});save()
+    help_text=read('diagnostic-log-help',['/usr/bin/log','help','show'],5)
+    if help_text is not None and all(option in help_text for option in ['--last','--predicate','--style']):
+        # Only this newly bound UUID, not all host/user/application messages.
+        predicate='(subsystem BEGINSWITH "com.apple.CoreSimulator") AND (eventMessage CONTAINS[c] "'+OWNED_UUID+'")'
+        read('diagnostic-own-uuid-log',['/usr/bin/log','show','--last','5m','--style','json','--predicate',predicate],15)
+    else:result['operations'].append({'label':'diagnostic-own-uuid-log','status':'ACTUAL_LOG_HELP_NOT_ACQUIRED_NO_QUERY'});save()
+    result['elapsedSeconds']=time.monotonic()-began;save()
+
 def main():
     global START,CLIENT
     START=time.monotonic();save()
@@ -228,6 +262,8 @@ def main():
         qualify();R['status']='EXACT_RUNTIME_OWN_DEVICE_BOOT_QUALIFIED_PENDING_CLEANUP';save()
     except Exception as error:
         R['status']='REFUSED_OR_INCOMPLETE';R['refusalCode']=str(error)if isinstance(error,Refused)else type(error).__name__;save()
+        try:boot_failure_diagnostics()
+        except Exception as diagnostic_error:R['bootFailureDiagnosticExceptionType']=type(diagnostic_error).__name__;save()
     finally:
         if CLIENT is not None:
             try:cleanup_device()
