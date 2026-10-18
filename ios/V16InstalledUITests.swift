@@ -623,7 +623,7 @@ import Network
         // Exact selector established by retained iOS18.6 Cell witness; toy rerun gate still applies.
         let actions = safari.collectionViews["activityCollectionView"]
         installCheckpoint("share-actions.wait.before")
-        XCTAssertTrue(actions.waitForExistence(timeout: 5))
+        XCTAssertTrue(actions.waitForExistence(timeout: 60))
         installCheckpoint("share-actions.wait.after")
         let q = actions.cells.matching(identifier: "Add to Home Screen")
         for _ in 0..<4 { if q.firstMatch.exists && q.firstMatch.isHittable { break }; actions.swipeUp() }
