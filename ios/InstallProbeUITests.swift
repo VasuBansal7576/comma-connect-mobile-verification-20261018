@@ -24,11 +24,38 @@ import XCTest
     }
 
     private func launchInstalled() -> XCUIApplication {
-        XCUIDevice.shared.press(.home)
         let home = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        // Add may already reveal the newly installed icon. A second Home press
+        // resets the selected page, so press only when Springboard is not foreground.
+        if home.state != .runningForeground { XCUIDevice.shared.press(.home) }
+        XCTAssertTrue(home.wait(for: .runningForeground, timeout: 5), "Springboard not foreground")
         let icon = home.icons["CI Audio Probe"]
         XCTAssertTrue(icon.waitForExistence(timeout: 8), "No installed Home icon")
-        XCTAssertTrue(icon.isHittable, "Installed icon not visible")
+        for _ in 0..<4 {
+            if icon.isHittable { break }
+            let indicators = home.pageIndicators.matching(identifier: "Page control")
+            guard indicators.count == 1, let value = indicators.element.value as? String else {
+                retain("home-page-indicator-unavailable", app: home)
+                XCTFail("Unique actual Home-page indicator required"); break
+            }
+            let words = value.split(separator: " ")
+            guard words.count == 4, words[0] == "Page", words[2] == "of",
+                  let page = Int(words[1]), let total = Int(words[3]),
+                  page >= 1, total >= page, total <= 5, page < total else {
+                retain("home-page-boundary-refused", app: home)
+                XCTFail("Refuse unknown/last Home page; never swipe into App Library: " + value); break
+            }
+            let expected = "Page \(page + 1) of \(total)"
+            retain("home-before-next-page-\(page)", app: home)
+            home.swipeLeft()
+            let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", expected), object: indicators.element)
+            guard XCTWaiter.wait(for: [changed], timeout: 3) == .completed else {
+                retain("home-page-transition-refused", app: home)
+                XCTFail("Actual Home page did not advance exactly to " + expected); break
+            }
+        }
+        retain("home-before-installed-icon-tap", app: home)
+        XCTAssertTrue(icon.isHittable, "Installed icon not visible on verified Home pages")
         icon.tap()
         // Apple/WebKit identify the iOS Web Clip host as com.apple.webapp.
         // Query only; never activate this host to fake a Home-icon launch.

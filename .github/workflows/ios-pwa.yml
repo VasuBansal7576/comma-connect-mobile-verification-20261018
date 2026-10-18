@@ -26,16 +26,18 @@ jobs:
           python3 scripts/run_native_calibration.py evidence/native-calibration
           python3 scripts/assess_pcm.py evidence/native-calibration/system.f32 evidence/native-calibration/capture.json evidence/native-calibration/assessment.json
       - name: Build unsigned UI test and start owned fixture
+        timeout-minutes: 5
         run: |
           python3 scripts/make_fixture_tone.py fixture/tone.wav
           python3 scripts/generate_project.py
           simulator=$(python3 scripts/select_simulator.py)
           echo "SIMULATOR_UDID=$simulator" >> "$GITHUB_ENV"
           xcrun simctl boot "$simulator"
-          xcrun simctl bootstatus "$simulator" -b
+          xcrun simctl bootstatus "$simulator" -b > evidence/boot-ui.log 2>&1
           open -a Simulator
           xcodebuild build-for-testing -project CIProbe.xcodeproj -scheme CIProbe -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO > evidence/build-ui.log 2>&1
       - name: Actual Safari Add Home and launch standalone
+        timeout-minutes: 4
         run: |
           python3 -m http.server 8765 --bind 127.0.0.1 --directory fixture > evidence/fixture-http.log 2>&1 &
           fixture_pid=$!
