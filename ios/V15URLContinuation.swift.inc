@@ -1,0 +1,167 @@
+// PROPOSAL: append this extension to the SAME ios/V15InstalledUITests.swift.
+// It uses the file-private native Home install helpers. Do not add as a separate file.
+extension V15InstalledUITests {
+    private struct URLCarrierReceipt {
+        let phase: String
+        let document: String
+    }
+
+    private func urlVisibleControls(_ label: String) -> [XCUIElement] {
+        let buttons = host.buttons.matching(NSPredicate(format: "label == %@", label)).allElementsBoundByIndex
+        let links = host.links.matching(NSPredicate(format: "label == %@", label)).allElementsBoundByIndex
+        return (buttons + links).filter { $0.exists && $0.isEnabled && $0.isHittable }
+    }
+
+    private func urlTapControl(_ label: String) throws {
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.urlVisibleControls(label).count == 1
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 12), .completed, "Unique native action unavailable: " + label)
+        let hits = urlVisibleControls(label)
+        XCTAssertEqual(hits.count, 1, "Ambiguous native action: " + label)
+        try XCTUnwrap(hits.first).tap()
+    }
+
+    private func urlTapLink(_ label: String) throws {
+        let links = host.links.matching(NSPredicate(format: "label == %@", label))
+        XCTAssertTrue(links.firstMatch.waitForExistence(timeout: 12), "Missing exact current link: " + label)
+        XCTAssertEqual(links.count, 1)
+        let link = links.element
+        for _ in 0..<8 {
+            if link.isHittable { break }
+            host.swipeUp()
+        }
+        XCTAssertTrue(link.isEnabled && link.isHittable)
+        link.tap()
+    }
+
+    private func urlDockOpen() {
+        // phone-prep moves evidence/owner panels inside this higher-z-index dock.
+        // Its collapsed descendants must not obstruct actual history controls.
+        let summaries = host.buttons.matching(identifier: "Evidence export").allElementsBoundByIndex
+            + host.otherElements.matching(identifier: "Evidence export").allElementsBoundByIndex
+        if !summaries.contains(where: { $0.exists && $0.isHittable }) {
+            nativeSummaryTap("V15 verification controls", in: host)
+        }
+    }
+
+    private func urlEvidencePanel() {
+        urlDockOpen()
+        if !(host.buttons["Freeze"].exists && host.buttons["Freeze"].isHittable) {
+            nativeSummaryTap("Evidence export", in: host)
+        }
+        XCTAssertTrue(host.buttons["Freeze"].isHittable, "Actual current Freeze must be AX-accessible")
+    }
+
+    private func urlMenu() throws {
+        urlDockOpen()
+        if urlVisibleControls("Menu").isEmpty { nativeSummaryTap("Evidence export", in: host) }
+        try urlTapControl("Menu")
+        XCTAssertTrue(host.links["V15 URL/state controls"].waitForExistence(timeout: 12))
+    }
+
+    private func urlHistory(_ label: String) throws {
+        // urlSnapshot closed the entire dock, not just its Evidence export child.
+        // A hittable AX locator alone does not prove a higher overlay received no tap.
+        if urlVisibleControls(label).isEmpty { nativeSummaryTap("Declared browser navigation", in: host) }
+        try urlTapControl(label)
+    }
+
+    private func urlSnapshot(_ phase: String) throws -> URLCarrierReceipt {
+        XCTAssertEqual(host.state, .runningForeground, "Actual WebClip host required")
+        XCTAssertNotEqual(XCUIApplication(bundleIdentifier: "com.apple.mobilesafari").state, .runningForeground)
+        urlEvidencePanel()
+        largeWitnessMayExist = true
+        uniqueTap("Freeze", in: host)
+        let frozen = text("Frozen [0-9]+ UTF-8 bytes;.*", in: host, timeout: 15).label
+        uniqueTap("Pack frozen witness", in: host)
+        let packets = host.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "{\"format\":\"v13-gzip-export-carrier-v1\""
+        ))
+        XCTAssertTrue(packets.firstMatch.waitForExistence(timeout: 20))
+        let unique = Set(packets.allElementsBoundByIndex.map(\.label))
+        XCTAssertEqual(unique.count, 1, "Ambiguous native carrier")
+        let carrier = try XCTUnwrap(unique.first)
+        let bytes = Data(carrier.utf8)
+        XCTAssertLessThan(bytes.count, 2 * 1024 * 1024, "Bound native transfer size")
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let packed = text("Packed \(bytes.count) UTF-8 carrier bytes; SHA-256 \(digest);.*", in: host, timeout: 15).label
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let original = try XCTUnwrap(object["original"] as? [String: Any])
+        let packing = try XCTUnwrap(object["packing"] as? [String: Any])
+        XCTAssertEqual(object["format"] as? String, "v13-gzip-export-carrier-v1")
+        XCTAssertEqual(original["originalUIStatus"] as? String, frozen, "Old carrier cannot satisfy new Freeze")
+        XCTAssertEqual(original["candidateEntrySHA256"] as? String, "aca842c376c4711adbfef638afca7142639645015f839f03051c01b37a60e30a")
+        XCTAssertEqual(original["candidateSourceTreeSHA256"] as? String, "27fd46cd8ecb653e2d6e4cc78c49b67ff9852adfac10a72d08d98ff253436e5d")
+        XCTAssertEqual(packing["trustedClick"] as? Bool, true)
+        XCTAssertEqual(packing["roundTripVerified"] as? Bool, true)
+        XCTAssertEqual(packing["productStateModified"] as? Bool, false)
+        XCTAssertEqual(packing["nativeMediaModified"] as? Bool, false)
+        let document = try XCTUnwrap(original["documentInstance"] as? String)
+        XCTAssertFalse(document.isEmpty)
+        attachment("v15-url-\(phase)-carrier-json", carrier)
+        var receipt: [String: Any] = [
+            "schema": "v15-installed-url-xcui-receipt-v1", "phase": phase,
+            "carrierBytes": bytes.count, "carrierSHA256": digest,
+            "documentInstance": document, "originalSHA256": original["sha256"] ?? NSNull(),
+            "frozenAX": frozen, "packedAX": packed,
+            "input": "actual XCUI AX label", "host": "com.apple.webapp",
+            "standaloneInjected": false, "nativeHostForeground": host.state == .runningForeground
+        ]
+        if let nativeUDID = ProcessInfo.processInfo.environment["SIMULATOR_UDID"] { receipt["nativeEnvironmentUDID"] = nativeUDID }
+        attachment("v15-url-\(phase)-native-receipt", String(decoding:
+            try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys]), as: UTF8.self))
+        screen("v15-url-\(phase)")
+        // Never use full AX/debugDescription after Freeze.
+        nativeSummaryTap("Evidence export", in: host)
+        nativeSummaryTap("V15 verification controls", in: host)
+        return URLCarrierReceipt(phase: phase, document: document)
+    }
+
+    func testV15InstalledURLStateAndHistory() throws {
+        // Dedicated URL-only CI run: fresh real Safari install precedes this test.
+        // Never call Pin/Prepare/Unmute, OS audio capture, WebDriver JS or UA overrides.
+        launchHomeIcon()
+        try urlMenu()
+        try urlTapLink("V15 referrals alias controls")
+        _ = text("(?s)Refer a friend,.*Get \\$50\\.", in: host, timeout: 15)
+        let initial = try urlSnapshot("referrals-initial")
+        try urlTapControl("referrals") // actual product gift/header toggle
+        let closed = try urlSnapshot("referrals-closed")
+        XCTAssertEqual(closed.document, initial.document)
+        try urlHistory("Browser Back")
+        let back = try urlSnapshot("referrals-back")
+        XCTAssertEqual(back.document, initial.document)
+        try urlHistory("Browser Forward")
+        let forward = try urlSnapshot("referrals-forward")
+        XCTAssertEqual(forward.document, initial.document)
+        try urlHistory("Browser Back")
+        let beforeReload = try urlSnapshot("referrals-before-reload")
+        XCTAssertEqual(beforeReload.document, initial.document)
+        try urlHistory("Reload document")
+        _ = text(".*V15.*aca842c376c4.*", in: host, timeout: 30)
+        let reloaded = try urlSnapshot("referrals-reloaded")
+        XCTAssertNotEqual(reloaded.document, initial.document)
+
+        try urlMenu()
+        try urlTapLink("V15 URL/state controls")
+        _ = text("Device settings", in: host, timeout: 15)
+        _ = text("acced23acced2302", in: host, timeout: 8)
+        screen("v15-url-settings-cold-modal")
+        attachment("v15-url-settings-cold-modal-native",
+                   "Actual native Device settings and device B caption; full state is not inferred from this screenshot.")
+        try urlTapControl("Close")
+        let settingsClosed = try urlSnapshot("settings-closed")
+        try urlHistory("Browser Back")
+        _ = text("Device settings", in: host, timeout: 12)
+        _ = text("acced23acced2302", in: host, timeout: 8)
+        screen("v15-url-settings-back-reopened-modal")
+        // Modal aria-hidden behavior can make external lab buttons unavailable to AX.
+        // Use the real modal Close, and prove the closed-state payload after both visits.
+        try urlTapControl("Close")
+        let settingsClosedAgain = try urlSnapshot("settings-closed-again")
+        XCTAssertEqual(settingsClosedAgain.document, settingsClosed.document)
+        XCUIDevice.shared.press(.home)
+    }
+}
+

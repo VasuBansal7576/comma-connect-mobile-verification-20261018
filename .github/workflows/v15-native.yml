@@ -1,0 +1,84 @@
+name: V15 installed iOS native playback and URL evidence
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-evidence:
+    runs-on: macos-15
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Mandatory stock browser V15 byte gate
+        timeout-minutes: 2
+        run: |
+          mkdir -p evidence
+          node scripts/browser_default_preflight.mjs
+      - name: Compose reviewed tests and boot an existing iOS runtime
+        timeout-minutes: 3
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$(uname -m)" = arm64
+          python3 scripts/generate_v15_native_project.py
+          simulator=$(python3 scripts/select_simulator.py)
+          echo "SIMULATOR_UDID=$simulator" >> "$GITHUB_ENV"
+          xcrun simctl boot "$simulator"
+          xcrun simctl bootstatus "$simulator" -b
+          open -a Simulator
+      - name: Build unsigned test-only native continuations
+        timeout-minutes: 5
+        run: xcodebuild build-for-testing -project CIProbeV15.xcodeproj -scheme CIProbeV15 -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -derivedDataPath DerivedData ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO > evidence/v15-native-build.log 2>&1
+      - name: Real Safari Add Home and installed icon launch
+        id: install
+        timeout-minutes: 4
+        run: |
+          xcrun simctl openurl "$SIMULATOR_UDID" 'https://comma-connect-fix-lab-20261016.zippy17.chatgpt.site/nqa?candidate=v15&experiment=nqa'
+          xcodebuild test-without-building -project CIProbeV15.xcodeproj -scheme CIProbeV15 -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -derivedDataPath DerivedData -resultBundlePath evidence/v15-install.xcresult -only-testing:CIProbeUITests/V15InstalledUITests/testInstallV15FromSafari CODE_SIGNING_ALLOWED=NO > evidence/v15-install-ui.log 2>&1
+      - name: Actual natural EOF continuation (transport classified from source)
+        if: always() && steps.install.outcome == 'success'
+        timeout-minutes: 5
+        run: xcodebuild test-without-building -project CIProbeV15.xcodeproj -scheme CIProbeV15 -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -derivedDataPath DerivedData -resultBundlePath evidence/v15-native-eof.xcresult -only-testing:CIProbeUITests/V15InstalledUITests/testV15InstalledNaturalEOFContinuation CODE_SIGNING_ALLOWED=NO > evidence/v15-native-eof.log 2>&1
+      - name: Actual native failure branch or explicit unacquired evidence
+        if: always() && steps.install.outcome == 'success'
+        timeout-minutes: 5
+        run: xcodebuild test-without-building -project CIProbeV15.xcodeproj -scheme CIProbeV15 -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -derivedDataPath DerivedData -resultBundlePath evidence/v15-native-failure.xcresult -only-testing:CIProbeUITests/V15InstalledUITests/testV15InstalledNativeFailureContinuation CODE_SIGNING_ALLOWED=NO > evidence/v15-native-failure.log 2>&1
+      - name: Actual installed URL history, reload and settings continuation
+        if: always() && steps.install.outcome == 'success'
+        timeout-minutes: 7
+        run: xcodebuild test-without-building -project CIProbeV15.xcodeproj -scheme CIProbeV15 -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -derivedDataPath DerivedData -resultBundlePath evidence/v15-output.xcresult -only-testing:CIProbeUITests/V15InstalledUITests/testV15InstalledURLStateAndHistory CODE_SIGNING_ALLOWED=NO > evidence/v15-url.log 2>&1
+      - name: Preserve selected simulator screen
+        if: always() && env.SIMULATOR_UDID != ''
+        timeout-minutes: 1
+        run: xcrun simctl io "$SIMULATOR_UDID" screenshot evidence/final-simulator.png > evidence/final-screenshot.log 2>&1 || true
+      - name: Shut down only selected simulator
+        if: always() && env.SIMULATOR_UDID != ''
+        run: xcrun simctl shutdown "$SIMULATOR_UDID" || true
+      - name: Export official native attachments (integrity still assessed offline)
+        if: always()
+        timeout-minutes: 3
+        run: python3 scripts/export_xcresult_attachments.py
+      - name: Retain stable native evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v15-installed-native-${{ github.run_id }}
+          path: |
+            evidence/*.json
+            evidence/*.log
+            evidence/*.txt
+            evidence/*.png
+            evidence/v15-*-attachments/
+          retention-days: 3
+      - name: Optional raw Xcode bundles
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v15-native-raw-${{ github.run_id }}
+          path: evidence/*.xcresult/
+          retention-days: 3
