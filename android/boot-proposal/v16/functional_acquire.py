@@ -84,6 +84,11 @@ class Driver:
   # Quick Freeze AND Pack can be outside Evidence; original Download stays inside it.
   self.ensure('Download','Evidence export')
   if not self.present('Download'):raise self.b.Refused('ACTUAL_EVIDENCE_CHILD_NOT_ACQUIRED')
+ def compact_export(self):
+  self.ensure('Evidence export','V16 verification controls')
+  if self.present('Download'):self.tap('Evidence export')
+  if self.present('Download'):raise self.b.Refused('EVIDENCE_MUST_BE_NATIVE_CLOSED_FOR_FREEZE')
+  if not self.present('Freeze')or not self.present('Pack frozen witness'):raise self.b.Refused('ORIGINAL_COMPACT_EXPORT_CONTROLS_UNACQUIRED')
  def close_declared_navigation_if_open(self):
   if self.present('Browser Back'):
    self.tap('Declared browser navigation')
@@ -98,11 +103,11 @@ class Driver:
   self.close_declared_navigation_if_open();self.export_panel();self.tap('Menu',new_document=True);o,_=self.wait(lambda o:o['href']==bridge.ORIGIN+'/r?candidate=v16',20,new_document=True)
   if not self.current_menu(o):raise self.b.Refused('CURRENT_REVIEWED_MENU_UNACQUIRED')
  def snapshot(self,phase):
-  self.export_panel();prior,_=self.observe();self.tap('Freeze');o,_=self.wait(lambda o:(o['exportStatus']or'').startswith('Frozen ')and o['exportStatus']!=prior['exportStatus'],15);frozen=o['exportStatus']
+  self.compact_export();prior,_=self.observe();self.tap('Freeze');o,_=self.wait(lambda o:(o['exportStatus']or'').startswith('Frozen ')and o['exportStatus']!=prior['exportStatus'],15);frozen=o['exportStatus']
   previous_pack=o['packStatus'];self.tap('Pack frozen witness');self.wait(lambda o:(o['packStatus']or'').startswith('Packed ')and o['packStatus']!=previous_pack,20);o,folder=self.observe(carrier=True)
   raw=(folder/'original-carrier.txt').read_bytes();data,x=contract.unpack(raw,o['packStatus'],frozen,o['timeOrigin']);(self.out/(phase+'-carrier.txt')).write_bytes(raw);(self.out/(phase+'-frozen.json')).write_bytes(data)
   self.snapshots[phase]={'timeOrigin':o['timeOrigin'],'document':x['state']['documentInstance'],'carrierSHA256':sha(raw),'frozenSHA256':sha(data),'readonlyFolder':folder.name};self.save()
-  self.tap('Evidence export');self.tap('V16 verification controls');return x
+  self.tap('V16 verification controls');return x
  def native_freeze(self,count):
   self.ensure('Native failure input controls','V16 verification controls');self.ensure('Freeze actual native witness','Native failure input controls');self.tap('Freeze actual native witness');o,_=self.wait(lambda o:o['nativeFreezeStatus']=='Frozen '+str(count)+' complete',15);report=bridge.decode_json((o['nativeReportText']or'').encode());contract.latest(report,count);(self.out/('nf-'+str(count)+'.json')).write_text(json.dumps(report,indent=2)+'\n');self.tap('V16 verification controls');return report
  def native_text(self,*labels):
