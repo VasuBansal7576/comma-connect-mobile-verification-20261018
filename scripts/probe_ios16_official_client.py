@@ -126,6 +126,8 @@ def main():
         if version.strip()!='Xcode 16.4\nBuild version 16F6':raise Refused('EXACT_XCODE164_BUILD_REQUIRED')
         require_help(execute('actual-help',['/usr/bin/xcodebuild','-help'],20))
         execute('existing-firstlaunch-status',['/usr/bin/xcodebuild','-checkFirstLaunchStatus'],20)
+        execute('simulator-service-readonly-preflight',['/usr/bin/xcrun','simctl','list','--json'],90)
+        R['coreSimulatorServiceReadiness']='READONLY_LIST_EXITED_ZERO_NOT_RUNTIME_USE_PROOF';R['installedRuntimeState']='PREEXISTING_LIST_RETAINED_NO_POSTCLIENT_INVENTORY';save()
         export=(OUT/'export').resolve();export.mkdir(exist_ok=False);owned_export=True
         if shutil.disk_usage(OUT).free<MIN_FREE:raise Refused('DISK_FREE_FLOOR')
         R['status']='ONE_OFFICIAL_CLIENT_OPERATION';R['scope']='May download, install and export exact20E247; no consent/account response, runtime import, boot or product test is requested.';save()
