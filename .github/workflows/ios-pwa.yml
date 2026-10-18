@@ -1,0 +1,52 @@
+# Free installed-PWA feasibility probe. Native output preflight has passed.
+name: Installed simulator PWA and output feasibility
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  installed-pwa:
+    runs-on: macos-15
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Inventory and compile
+        run: |
+          test "$(uname -m)" = arm64
+          bash scripts/inventory.sh
+          xcrun swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx15.0 macos/CaptureSystemAudio.swift -o capture-system-audio
+          ./capture-system-audio preflight > evidence/screen-capture-preflight.json
+      - name: Qualify actual native OS output and clock first
+        run: |
+          python3 scripts/run_native_calibration.py evidence/native-calibration
+          python3 scripts/assess_pcm.py evidence/native-calibration/system.f32 evidence/native-calibration/capture.json evidence/native-calibration/assessment.json
+      - name: Build unsigned UI test and start owned fixture
+        run: |
+          python3 scripts/make_fixture_tone.py fixture/tone.wav
+          python3 scripts/generate_project.py
+          simulator=$(python3 scripts/select_simulator.py)
+          echo "SIMULATOR_UDID=$simulator" >> "$GITHUB_ENV"
+          xcrun simctl boot "$simulator"
+          xcrun simctl bootstatus "$simulator" -b
+          open -a Simulator
+          xcodebuild build-for-testing -project CIProbe.xcodeproj -scheme CIProbe -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO > evidence/build-ui.log 2>&1
+      - name: Actual Safari Add Home and launch standalone
+        run: |
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory fixture > evidence/fixture-http.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          xcrun simctl openurl "$SIMULATOR_UDID" http://127.0.0.1:8765/
+          xcodebuild test-without-building -project CIProbe.xcodeproj -scheme CIProbe -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -derivedDataPath DerivedData -resultBundlePath evidence/install.xcresult -only-testing:CIProbeUITests/InstallProbeUITests/testInstallFromSafari CODE_SIGNING_ALLOWED=NO > evidence/install-ui.log 2>&1
+          python3 scripts/run_pwa_capture.py "$SIMULATOR_UDID"
+      - name: Retain test-only receipts on any result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: installed-pwa-feasibility-${{ github.run_id }}
+          path: evidence/
+          retention-days: 3

@@ -1,0 +1,13 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="CI Audio Probe"><link rel="manifest" href="/manifest.webmanifest"><title>CI Audio Probe</title></head>
+<body><h1>CI-owned output calibration</h1><p id="context"></p><button id="play">Play 440 Hz</button><button id="pause">Pause audio</button><button id="resume">Resume audio</button><button id="mute">Mute audio</button><button id="unmute">Unmute audio</button><p id="state">Not started</p><pre id="events"></pre><audio id="audio" src="/tone.wav" loop preload="auto"></audio>
+<script>
+const audio=document.querySelector('audio'), events=[];
+const standalone=navigator.standalone===true&&matchMedia('(display-mode: standalone)').matches;
+document.querySelector('#context').textContent=`PWA standalone ${standalone}`;
+function log(type){events.push({type,at:performance.now(),standalone:navigator.standalone===true,displayStandalone:matchMedia('(display-mode: standalone)').matches,paused:audio.paused,muted:audio.muted,time:audio.currentTime,ready:audio.readyState});document.querySelector('#events').textContent=JSON.stringify(events);document.querySelector('#state').textContent=`Audio ${audio.paused?'paused':'playing'} ${audio.muted?'muted':'unmuted'}`;}
+for(const name of ['playing','pause','volumechange','seeking','seeked','ended','error'])audio.addEventListener(name,()=>log(name));
+document.querySelector('#play').onclick=()=>audio.play().catch(()=>log('play-rejected'));
+document.querySelector('#pause').onclick=()=>audio.pause();document.querySelector('#resume').onclick=()=>audio.play().catch(()=>log('resume-rejected'));
+document.querySelector('#mute').onclick=()=>audio.muted=true;document.querySelector('#unmute').onclick=()=>audio.muted=false;
+log('document');
+</script></body></html>

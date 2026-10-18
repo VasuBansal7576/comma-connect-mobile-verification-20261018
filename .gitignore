@@ -1,3 +1,6 @@
 evidence/
 capture-system-audio
 __pycache__/
+DerivedData/
+CIProbe.xcodeproj/
+fixture/tone.wav
