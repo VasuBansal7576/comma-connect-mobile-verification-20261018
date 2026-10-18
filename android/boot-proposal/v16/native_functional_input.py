@@ -88,3 +88,75 @@ def menu_context(xml,png):
  content=list(web[0].iter());labels=[e.get('text')or e.get('content-desc')for e in content if e.get('enabled')!='false'and e.get('visible-to-user')!='false'and e.get('displayed')!='false']
  if labels.count('V16 e7ab13f79d01')!=1 or not anchors.intersection(labels):raise Refused('CURRENT_NATIVE_MENU_ANCHORS_REQUIRED')
  return {'package':apps[0],'screen':[w,h],'currentBadgeObserved':True,'menuAnchors':sorted(anchors.intersection(labels)),'scope':'Context observation only; each later target still requires the unchanged unique native input resolver.'}
+
+
+def observed_label_presence(xml,png,label):
+ """Native disclosure-child presence only, never coordinates or tap authority."""
+ if label not in LABELS:raise Refused('UNREVIEWED_NATIVE_AUDIO_LABEL')
+ if not isinstance(xml,bytes)or len(xml)>2*1024*1024 or b'<!DOCTYPE'in xml.upper()or b'<!ENTITY'in xml.upper():raise Refused('BOUNDED_NATIVE_XML_REQUIRED')
+ if not isinstance(png,bytes)or len(png)<24 or png[:8]!=b'\x89PNG\r\n\x1a\n'or png[12:16]!=b'IHDR':raise Refused('CURRENT_NATIVE_PNG_REQUIRED')
+ w,h=struct.unpack('>II',png[16:24])
+ if not(0<w<=16384 and 0<h<=16384):raise Refused('FINITE_NATIVE_SCREEN')
+ try:tree=ET.fromstring(xml)
+ except ET.ParseError:raise Refused('NATIVE_XML_INVALID')
+ nodes=list(tree.iter());parents={c:p for p in nodes for c in p};packages={e.get('package')for e in nodes if e.get('package')}
+ apps=[p for p in packages if p=='com.android.chrome'or re.fullmatch(r'org\.chromium\.webapk\.[A-Za-z0-9_.]+',p)]
+ if len(apps)!=1 or not packages.issubset({apps[0],'android','com.android.systemui'}):raise Refused('OWNED_CHROME_OR_WEBAPK_NATIVE_CONTEXT_REQUIRED')
+ if any(e.get('resource-id','').endswith(('/parentPanel','/permission_message','/alertTitle','/tab_modal_dialog_container','/bottom_sheet'))for e in nodes):raise Refused('UNKNOWN_NATIVE_MODAL')
+ labels=[e for e in nodes if e.get('package')==apps[0]and(label==e.get('text')or label==e.get('content-desc'))]
+ if not labels:return False
+ def chain(e):
+  out=[e]
+  while e in parents:e=parents[e];out.append(e)
+  return out
+ for e in labels:
+  ancestors=chain(e)
+  if any(x.get('enabled')=='false'or x.get('visible-to-user')=='false'or x.get('displayed')=='false'for x in ancestors):raise Refused('CURRENT_NATIVE_LABEL_INELIGIBLE')
+  if not any(x.get('class')=='android.webkit.WebView'and x.get('package')==apps[0]for x in ancestors):raise Refused('NATIVE_PRESENCE_INSIDE_WEBVIEW_REQUIRED')
+ # A structural wrapper and its exact-label child describe one native group.
+ # Separate same-label groups remain ambiguous even when their bounds are zero.
+ roots=[e for e in labels if not any(x in labels for x in chain(e)[1:])]
+ if len(roots)!=1:raise Refused('AMBIGUOUS_NATIVE_AUDIO_TARGET')
+ return True
+
+
+def offscreen_menu_reveal(xml,png):
+ """Scroll a known native dock to reveal Menu; never infer a target tap."""
+ if not observed_label_presence(xml,png,'Menu'):raise Refused('CURRENT_NATIVE_LABEL_ABSENT')
+ tree=ET.fromstring(xml);nodes=list(tree.iter());parents={c:p for p in nodes for c in p};w,h=struct.unpack('>II',png[16:24])
+ def chain(e):
+  out=[e]
+  while e in parents:e=parents[e];out.append(e)
+  return out
+ def bounds(e,positive=True):
+  m=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',e.get('bounds',''))
+  if not m:return None
+  a,b,c,d=map(int,m.groups())
+  return(a,b,c,d)if 0<=a<c<=w and 0<=b<=h and 0<=d<=h and(not positive or b<d)else None
+ targets=[e for e in nodes if e.get('package')=='com.android.chrome'and e.get('content-desc')=='Menu'and e.get('class')=='android.view.View'and e.get('clickable')=='true'and e.get('enabled')=='true']
+ if len(targets)!=1:raise Refused('UNIQUE_CLIPPED_MENU_RECEIVER_REQUIRED')
+ target=targets[0];raw=bounds(target,False);ancestors=chain(target);scrolls=[s for s in ancestors if s.get('scrollable')=='true'and s.get('enabled')=='true'and bounds(s)]
+ web=[s for s in ancestors if s.get('class')=='android.webkit.WebView'and s.get('package')=='com.android.chrome'and bounds(s)]
+ dock=[s for s in ancestors if s.get('text')=='V16 verification controls'and s.get('package')=='com.android.chrome']
+ children=list(target);zero=[e for e in children if e.get('text')=='Menu'and e.get('class')=='android.widget.TextView'and e.get('bounds')=='[0,0][0,0]'and e.get('clickable')=='false']
+ if not raw or len(scrolls)!=1 or len(web)!=1 or len(dock)!=1 or len(children)!=1 or len(zero)!=1:raise Refused('OBSERVED_CLIPPED_MENU_STRUCTURE_REQUIRED')
+ sr=bounds(scrolls[0]);wr=bounds(web[0]);a,b,c,d=raw;sa,sb,sc,sd=sr
+ if not(sa<=a<c<=sc and sd<=d<b<=h and d==wr[3]and 0<=sb<sd<=h):raise Refused('OBSERVED_MENU_BELOW_SCROLL_VIEWPORT_REQUIRED')
+ sy=sb+3*(sd-sb)//4;ey=sb+(sd-sb)//4;family=set(chain(scrolls[0]))|set(scrolls[0].iter());blocked=[]
+ for other in nodes:
+  if other in family or list(other)or other.get('enabled')=='false'or other.get('visible-to-user')=='false'or other.get('displayed')=='false':continue
+  rr=bounds(other)
+  if not rr or not any(rr[1]<=y<rr[3]for y in [sy,ey]):continue
+  pa=parents.get(other);holder=parents.get(pa)
+  background=(other.get('class')=='android.view.View'and other.get('index')=='0'and all(other.get(k,'')==''for k in ['text','content-desc','resource-id'])and all(other.get(k)=='false'for k in ['clickable','focusable','scrollable','long-clickable'])and pa is not None and pa.get('class')=='android.widget.FrameLayout'and pa.get('index')=='0'and holder is not None and holder.get('resource-id')=='com.android.chrome:id/compositor_view_holder'and rr==bounds(pa)==bounds(holder))
+  if not background:blocked.append((max(sa,rr[0]),min(sc,rr[2])))
+ # Choose only a gap proven clear of outside-container native leaf bounds at both endpoints.
+ gaps=[];left=sa
+ for a,c in sorted((a,c)for a,c in blocked if a<c):
+  if a>left:gaps.append((left,a))
+  left=max(left,c)
+ if left<sc:gaps.append((left,sc))
+ gaps=[(a,c)for a,c in gaps if c-a>=2]
+ if not gaps:raise Refused('NATIVE_SCROLL_ENDPOINT_OCCLUDED')
+ a,c=max(gaps,key=lambda r:r[1]-r[0]);sx=(a+c)//2
+ return {'kind':'scroll','label':'Menu','scrollBounds':sr,'x':sx,'fromY':sy,'toY':ey,'screen':[w,h],'clippedTargetBounds':raw,'scope':'Reveal only; a new fresh inventory and original strict resolver are required before any Menu tap.'}

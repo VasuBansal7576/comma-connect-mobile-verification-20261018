@@ -80,7 +80,14 @@ class Driver:
   if label=='Download':raise self.b.Refused('EVIDENCE_CHILD_IS_PRESENCE_ONLY_NEVER_DOWNLOAD')
   self.observe();b=self.b
   for scroll in range(4):
-   self.check();fresh,xml,png=b.retained_fresh_input('functional-'+str(self.n)+'-'+str(len(self.actions)));target=ui.resolve(xml,png,label);age=b.input_age(fresh);self.check()
+   self.check()
+   if scroll:self.observe()
+   fresh,xml,png=b.retained_fresh_input('functional-'+str(self.n)+'-'+str(len(self.actions)))
+   try:target=ui.resolve(xml,png,label)
+   except ui.Refused as error:
+    if label!='Menu'or str(error)!='NATIVE_CLICKABLE_ANCESTOR_REQUIRED':raise
+    target=ui.offscreen_menu_reveal(xml,png)
+   age=b.input_age(fresh);self.check()
    action={'label':label,'target':target,'nativeSnapshotLabel':fresh['label'],'xmlSHA256':sha(xml),'pngSHA256':sha(png),'captureStartMonotonic':fresh['captureStartMonotonic'],'ageSeconds':age,'documentTimeOriginBefore':self.origin,'inputOrdinal':b.STATE.get('UIInputCommands',0)+1,'attempts':1,'nativeInput':True,'commandCompleted':False};self.actions.append(action);self.save()
    if target['kind']=='scroll':
     if scroll>=3:raise b.Refused('THREE_FUNCTIONAL_NATIVE_SCROLLS_EXHAUSTED')
@@ -91,10 +98,7 @@ class Driver:
   raise b.Refused('FUNCTIONAL_NATIVE_TARGET_UNACQUIRED')
  def present(self,label):
   self.observe();fresh,xml,png=self.b.retained_fresh_input('functional-presence-'+str(self.n))
-  try:ui.resolve(xml,png,label);return True
-  except ui.Refused as e:
-   if str(e)!='CURRENT_NATIVE_LABEL_ABSENT':raise
-   return False
+  self.b.input_age(fresh);self.check();return ui.observed_label_presence(xml,png,label)
  def ensure(self,label,disclosure):
   if not self.present(label):self.tap(disclosure)
  def export_panel(self):
