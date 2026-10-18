@@ -1,0 +1,38 @@
+# Test-only, bounded remote audio preflight; no phone rental or local Mac capture.
+name: Remote simulator audio prerequisites
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preflight:
+    # Official standard Apple Silicon label; assert actual arch/image in artifacts.
+    runs-on: macos-15
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Inventory existing tools and devices
+        run: |
+          test "$(uname -m)" = arm64
+          bash scripts/inventory.sh
+      - name: Build audio-only system collector
+        run: |
+          xcrun swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx15.0 macos/CaptureSystemAudio.swift -o capture-system-audio
+      - name: Permission preflight without prompt
+        run: ./capture-system-audio preflight > evidence/screen-capture-preflight.json
+      - name: Existing-route native tone calibration
+        run: |
+          python3 scripts/run_native_calibration.py evidence/existing-route
+          python3 scripts/assess_pcm.py evidence/existing-route/system.f32 evidence/existing-route/capture.json evidence/existing-route/assessment.json
+      - name: Retain bounded test-only receipts, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-audio-prerequisites-${{ github.run_id }}
+          path: evidence/
+          retention-days: 3
