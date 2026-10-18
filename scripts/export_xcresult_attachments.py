@@ -12,7 +12,7 @@ def main():
         supported=helpResult.returncode==0 and '--path' in helpText and '--output-path' in helpText
         report.update(installedHelpReturnCode=helpResult.returncode,installedHelpSHA256=hashlib.sha256(helpText.encode()).hexdigest(),supportedFlagsVerified=supported)
         if not supported:raise RuntimeError('Installed xcresulttool does not advertise reviewed export attachments flags; retain original xcresult unchanged')
-        for name in ['v15-install','v15-output','v15-native-eof','v15-native-failure']:
+        for name in ['v15-install','v15-output','v15-native-eof','v15-native-failure','v15-url']:
             bundle=root/(name+'.xcresult');target=root/(name+'-attachments')
             if not bundle.exists():report['exports'].append({'bundle':str(bundle),'skipped':'bundle absent'});continue
             if target.exists():raise RuntimeError('Refuse attachment overwrite')

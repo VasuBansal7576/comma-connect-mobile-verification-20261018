@@ -121,7 +121,7 @@ extension V15InstalledUITests {
     func testV15InstalledURLStateAndHistory() throws {
         // Dedicated URL-only CI run: fresh real Safari install precedes this test.
         // Never call Pin/Prepare/Unmute, OS audio capture, WebDriver JS or UA overrides.
-        launchHomeIcon()
+        launchHomeIcon(requireAudioControls: false)
         try urlMenu()
         try urlTapLink("V15 referrals alias controls")
         _ = text("(?s)Refer a friend,.*Get \\$50\\.", in: host, timeout: 15)

@@ -6,6 +6,7 @@ import Network
     private let iconName = "V15 Audio Lab"
     private let host = XCUIApplication(bundleIdentifier: "com.apple.webapp")
     private var largeWitnessMayExist = false
+    private var addNameSelectorFailureRecorded = false
     private var ciSession: [String: Any]? = nil
     private let ciClientNonce = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
     private var ciDone = false
@@ -21,7 +22,7 @@ import Network
         for name in names { counts[name] = app.buttons.matching(identifier: name).count }
         let data = try JSONSerialization.data(withJSONObject: ["scope": "Small diagnostic AX button counts only; never a carrier", "largeWitnessMayExist": largeWitnessMayExist, "counts": counts], options: [.sortedKeys])
         attachment("v15-failure-small-AX", String(decoding: data, as: UTF8.self))
-        if !largeWitnessMayExist {
+        if !largeWitnessMayExist && !addNameSelectorFailureRecorded {
             attachment("v15-failure-prefreeze-AX-prefix", String(app.debugDescription.prefix(8000)))
             attachment("v15-failure-safari-AX-prefix", String(XCUIApplication(bundleIdentifier: "com.apple.mobilesafari").debugDescription.prefix(8000)))
             attachment("v15-failure-home-AX-prefix", String(XCUIApplication(bundleIdentifier: "com.apple.springboard").debugDescription.prefix(4000)))
@@ -95,7 +96,7 @@ import Network
         // Home-flow receipts occur only before any large page export.
         attachment("v15-" + name + "-hierarchy", home.debugDescription)
     }
-    private func launchHomeIcon() {
+    private func launchHomeIcon(requireAudioControls: Bool = true) {
         let home = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         // Add may already reveal the newly installed icon. A second Home press
         // resets the selected page, so press only when Springboard is not foreground.
@@ -132,8 +133,38 @@ import Network
         XCTAssertTrue(icon.isHittable, "Installed icon not visible on verified Home pages")
         icon.tap()
         // Query the real Web Clip host; never activate it or forge standalone flags.
-        ensureQuickControls(in: host)
+        if requireAudioControls {
+            ensureQuickControls(in: host)
+        } else {
+            XCTAssertTrue(host.wait(for: .runningForeground, timeout: 8), "Installed WebClip did not become foreground")
+            _ = text(".*V15.*aca842c376c4.*", in: host, timeout: 30)
+        }
         screen("v15-home-icon-launched")
+    }
+    private func retainAddNameSelectorFailure(in safari: XCUIApplication) throws {
+        // Public generated test UI only. Never request the expensive full app debugDescription.
+        addNameSelectorFailureRecorded = true
+        var groups: [[String: Any]] = []
+        for (kind, query) in [("textField", safari.textFields), ("textView", safari.textViews),
+                              ("navigationBar", safari.navigationBars)] {
+            let count = query.count
+            var elements: [[String: Any]] = []
+            for index in 0..<min(count, 32) {
+                let element = query.element(boundBy: index)
+                let label = element.label
+                let value = (element.value as? String) ?? String(describing: element.value)
+                elements.append(["index": index, "elementType": element.elementType.rawValue,
+                    "label": String(label.prefix(256)), "value": String(value.prefix(1024)),
+                    "labelTruncated": label.count > 256, "valueTruncated": value.count > 1024,
+                    "exists": element.exists, "enabled": element.isEnabled, "hittable": element.isHittable])
+            }
+            groups.append(["kind": kind, "actualCount": count, "capturedCount": elements.count,
+                           "truncatedElements": max(0, count - elements.count), "elements": elements])
+        }
+        attachment("v15-add-name-selector-failure", String(decoding: try JSONSerialization.data(withJSONObject:
+            ["expectedExactValue": iconName, "expectedNavigationTitle": "Add to Home Screen",
+             "groups": groups, "scope": "Fresh bounded native Add UI fields/views and navigation bars; no typing, normalization or value mutation."], options: [.sortedKeys]), as: UTF8.self))
+        screen("v15-add-name-selector-failure")
     }
     func testInstallV15FromSafari() throws {
         let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
@@ -150,15 +181,66 @@ import Network
         attachment("v15-real-share-actions", safari.debugDescription); q.element.tap()
         screen("v15-real-add-confirmation")
         // Manifest/meta title must supply the intended icon name; do not guess/change it silently.
-        let name = safari.textFields.firstMatch
-        XCTAssertTrue(name.waitForExistence(timeout: 5)); XCTAssertEqual(name.value as? String, iconName)
+        let addBars = safari.navigationBars.matching(identifier: "Add to Home Screen")
+        let addContextReady = addBars.firstMatch.waitForExistence(timeout: 5)
+        let expectedName = NSPredicate(format: "value == %@", iconName)
+        let nameFields = safari.textFields.matching(expectedName), nameViews = safari.textViews.matching(expectedName)
+        let appeared = XCTNSPredicateExpectation(predicate: NSPredicate { _,_ in
+            nameFields.count + nameViews.count > 0
+        }, object: nil)
+        let nameReady = XCTWaiter.wait(for: [appeared], timeout: 5) == .completed
+        let names = nameFields.allElementsBoundByIndex + nameViews.allElementsBoundByIndex
+        let uniqueName = names.count == 1
+        let actualName = uniqueName ? names.first : nil
+        let nameEditable = actualName.map { $0.exists && $0.isEnabled && $0.isHittable } ?? false
+        let exactValue = actualName?.value as? String == iconName
+        if !addContextReady || addBars.count != 1 || !nameReady || !uniqueName || !nameEditable || !exactValue {
+            try retainAddNameSelectorFailure(in: safari)
+        }
+        XCTAssertTrue(addContextReady, "Actual Add to Home Screen navigation context missing")
+        XCTAssertEqual(addBars.count, 1, "Unique actual Add navigation bar required")
+        XCTAssertTrue(nameReady, "Expected manifest/meta icon title not present in actual editable field/view")
+        XCTAssertEqual(names.count, 1, "Unique exact-value Add name textField/textView required")
+        let name = try XCTUnwrap(actualName)
+        XCTAssertTrue(name.exists && name.isEnabled && name.isHittable, "Actual Add name must be editable/hittable")
+        XCTAssertEqual(name.value as? String, iconName)
         uniqueTap("Add", in: safari)
         launchHomeIcon()
         attachment("v15-installed-initial-hierarchy", host.debugDescription)
         // Actual standalone proof is checked later in the unmodified source rows, not invented here.
     }
+    private func audioFreshEntryFromCurrentMenu() throws {
+        // Same WebClip navigation only. Start from NF/URL/current App without requiring audio controls.
+        XCTAssertEqual(host.state, .runningForeground)
+        let evidence = host.buttons.matching(identifier: "Evidence export").allElementsBoundByIndex
+            + host.otherElements.matching(identifier: "Evidence export").allElementsBoundByIndex
+        if !evidence.contains(where: { $0.exists && $0.isHittable }) {
+            nativeSummaryTap("V15 verification controls", in: host)
+        }
+        func visibleMenu() -> [XCUIElement] {
+            let buttons = host.buttons.matching(NSPredicate(format: "label == %@", "Menu")).allElementsBoundByIndex
+            let links = host.links.matching(NSPredicate(format: "label == %@", "Menu")).allElementsBoundByIndex
+            return (buttons + links).filter { $0.exists && $0.isEnabled && $0.isHittable }
+        }
+        if visibleMenu().isEmpty { nativeSummaryTap("Evidence export", in: host) }
+        let menuReady = XCTNSPredicateExpectation(predicate: NSPredicate { _,_ in visibleMenu().count == 1 }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [menuReady], timeout: 12), .completed, "Unique real same-WebClip Menu required")
+        let menus = visibleMenu(); XCTAssertEqual(menus.count, 1)
+        try XCTUnwrap(menus.first).tap()
+        // Exact current public menu anchor /v15/nqa. No URL command or DOM/JS navigation.
+        let audio = host.links.matching(NSPredicate(format: "label == %@", "V15 silent OS audio comparison"))
+        XCTAssertTrue(audio.firstMatch.waitForExistence(timeout: 12))
+        XCTAssertEqual(audio.count, 1)
+        let link = audio.element
+        for _ in 0..<8 { if link.isHittable { break }; host.swipeUp() }
+        XCTAssertTrue(link.isEnabled && link.isHittable)
+        link.tap()
+        XCTAssertTrue(host.wait(for: .runningForeground, timeout: 8), "Audio link left actual installed WebClip")
+    }
     func testV15InstalledAudioProtocol() throws {
-        launchHomeIcon()
+        launchHomeIcon(requireAudioControls: false)
+        try audioFreshEntryFromCurrentMenu()
+        ensureQuickControls(in: host)
         uniqueTap("Pin actual playlist", in: host)
         // Reveal the existing original status; no helper/source changes. Fail if summary AX differs.
         nativeSummaryTap("V15 OS audio test", in: host)
