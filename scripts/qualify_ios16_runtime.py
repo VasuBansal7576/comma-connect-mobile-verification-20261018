@@ -90,6 +90,16 @@ def bind_created(text,returned=None):
 def require_help(text,words):
     if any(word.lower()not in text.lower()for word in words):raise Refused('ACTUAL_SIMCTL_HELP_REQUIRED')
 
+def require_simctl_commands(text):
+    # Public general help omits hidden bootstatus; inspect its actual help next.
+    commands=set(re.findall(r'^\s+([a-z_]+)\s{2,}\S',text,re.MULTILINE))
+    if not {'list','create','boot','shutdown','delete','io'}<=commands:raise Refused('ACTUAL_SIMCTL_HELP_REQUIRED')
+
+def require_bootstatus_help(text):
+    usage=re.search(r'^\s*usage:\s*simctl\s+bootstatus\b[^\r\n]*<device>[^\r\n]*',text,re.IGNORECASE|re.MULTILINE)
+    option=re.search(r'(?<![\w-])-b(?![\w-])',usage.group(0))if usage else None
+    if usage is None or(option is None and re.search(r'^\s*-b(?:\s|$)',text,re.MULTILINE)is None):raise Refused('ACTUAL_SIMCTL_BOOTSTATUS_HELP_REQUIRED')
+
 def runtime_support(runtime):
     evidence={'scope':'Actual simctl declarations, not independent archive signature/architecture verification.'}
     arch=runtime.get('supportedArchitectures')
@@ -110,7 +120,8 @@ def devices(phase,cleanup=False):return call(phase,['/usr/bin/xcrun','simctl','l
 def qualify():
     global NAME,BASELINE_IDS,OWNED_UUID
     runtime=exact_runtime(runtime_list('runtimes-before'))
-    require_help(call('simctl-help',['/usr/bin/xcrun','simctl','help'],20),['list','create','boot','bootstatus','shutdown','delete','io'])
+    require_simctl_commands(call('simctl-help',['/usr/bin/xcrun','simctl','help'],20))
+    require_bootstatus_help(call('help-bootstatus',['/usr/bin/xcrun','simctl','help','bootstatus'],20))
     if runtime is None:
         export=(OUT/'export').resolve();export.mkdir(exist_ok=False);R['ownedExportCreated']=True;save()
         call('official-exact-download',CLIENT.fixed_command(export),720,scan=True,export=export)
@@ -135,7 +146,6 @@ def qualify():
     if len(selected)!=1:raise Refused('UNIQUE_ACTUAL_IPHONE14_TYPE_REQUIRED')
     R['selectedDeviceType']={k:selected[0].get(k)for k in ['name','identifier','minRuntimeVersionString','maxRuntimeVersionString']}
     require_help(call('help-create',['/usr/bin/xcrun','simctl','help','create'],15),['create','name','device','runtime'])
-    require_help(call('help-bootstatus',['/usr/bin/xcrun','simctl','help','bootstatus'],15),['bootstatus','-b'])
     require_help(call('help-io',['/usr/bin/xcrun','simctl','help','io'],15),['io','screenshot'])
     NAME='rea-ios16-qualification-'+uuid.uuid4().hex;R['creation']={'unique128BitMarker':NAME,'attempted':False};save()
     baseline=device_rows(devices('devices-baseline'))
