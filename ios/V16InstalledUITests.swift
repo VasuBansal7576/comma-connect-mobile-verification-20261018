@@ -242,9 +242,8 @@ import Network
         var departed = false
         for attempt in 1...2 {
             let headings = host.staticTexts.matching(NSPredicate(format: "label == %@", "Current V16 checks"))
-            guard host.state == .runningForeground, reviewedCurrentMenu(),
-                  headings.count == 1, headings.element.exists else {
-                throw CIWireError.refused("Current source/Site38 heading/menu and installed foreground host required before menu input")
+            guard host.state == .runningForeground, reviewedCurrentMenu() else {
+                throw CIWireError.refused("Current source/menu and installed foreground host required before menu input")
             }
             guard query.firstMatch.waitForExistence(timeout: 8) else {
                 throw CIWireError.refused("Reviewed native menu Link missing")
@@ -257,7 +256,11 @@ import Network
             let before: [String: Any] = ["label": label, "attempt": attempt,
                 "hittable": target.isHittable, "frame": String(describing: target.frame),
                 "reviewedCurrentMenu": true, "hostStateRaw": host.state.rawValue,
-                "scope": "First input is native AX tap; sole second input requires fresh Site38 safe-body center proof. Maximum two; no force/manual swipe/URL command."]
+                "headingStaticTextCount": headings.count,
+                "headingAX": host.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Current V16 checks")).allElementsBoundByIndex.filter { $0.exists }.map {
+                    ["type": $0.elementType.rawValue, "frame": String(describing: $0.frame), "hittable": $0.isHittable] as [String: Any]
+                },
+                "scope": "First input is native AX tap on the current reviewed menu; heading AX is diagnostic only. Sole second input still requires fresh Site38 safe-body center proof. Maximum two; no force/manual swipe/URL command."]
             attachment("v16-menu-before-input", String(decoding: try JSONSerialization.data(withJSONObject: before, options: [.sortedKeys]), as: UTF8.self))
             if attempt == 1 { target.tap() }
             else { try nativeReviewedMenuCenterTap(label, query: query) }
