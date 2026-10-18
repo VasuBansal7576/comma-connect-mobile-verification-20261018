@@ -269,7 +269,7 @@ def chrome_terms_target(xml,png,version_lines):
 
 def maybe_approved_chrome_terms_action(version_lines,argv):
     if CHROME_TERMS_APPROVAL_FLAG not in argv:return False
-    if argv not in [[CHROME_TERMS_APPROVAL_FLAG],[CHROME_TERMS_APPROVAL_FLAG,OWNED_LAB_CONTINUATION_FLAG]]:raise Refused('EXACT_REVIEWED_CONTINUATION_FLAGS_REQUIRED')
+    if argv not in [[CHROME_TERMS_APPROVAL_FLAG],[CHROME_TERMS_APPROVAL_FLAG,OWNED_LAB_CONTINUATION_FLAG],[CHROME_TERMS_APPROVAL_FLAG,OWNED_LAB_CONTINUATION_FLAG,OWNED_MENU_OBSERVATION_FLAG]]:raise Refused('EXACT_REVIEWED_CONTINUATION_FLAGS_REQUIRED')
     capture_start=time.monotonic();screen('chrome-before-approved-terms-action')
     xml=(OUT/'chrome-before-approved-terms-action.xml').read_bytes();png=(OUT/'chrome-before-approved-terms-action.png').read_bytes()
     target=chrome_terms_target(xml,png,version_lines)
@@ -281,7 +281,8 @@ def maybe_approved_chrome_terms_action(version_lines,argv):
     STATE['termsAcceptedByScript']=None;STATE['termsAcceptanceActionDispatched']=True;STATE['termsAcceptanceOutcome']='UNVERIFIED_PENDING_POST_SCREEN_REVIEW';save()
     observe_post_terms_readiness()
     if OWNED_LAB_CONTINUATION_FLAG in argv:
-        continue_owned_lab_after_reviewed_privacy_notice(version_lines)
+        if OWNED_MENU_OBSERVATION_FLAG in argv:continue_owned_lab_after_reviewed_privacy_notice(version_lines,observe_menu=True)
+        else:continue_owned_lab_after_reviewed_privacy_notice(version_lines)
     else:STATE['status']='STOP_AFTER_APPROVED_CHROME_TERMS_ACTION_REQUIRES_REVIEW'
     return True
 
@@ -379,7 +380,7 @@ def observe_owned_lab_native_ui():
         row['scope']='Native UI observation only; URL/page readiness, helper pins and installed status require separate review.';save()
     STATE['ownedLabNativeObservationOutcome']='STOP_NATIVE_LAB_OBSERVATIONS_REQUIRE_REVIEW_NO_INSTALL_OR_AUDIO_VERDICT'
 
-def continue_owned_lab_after_reviewed_privacy_notice(version_lines):
+def continue_owned_lab_after_reviewed_privacy_notice(version_lines,observe_menu=False):
     # Optional owned-test continuation only; no Settings/dropdown/account/legal action.
     view_command=owned_lab_view_command()
     capture_start=time.monotonic();screen('chrome-before-reviewed-privacy-ack')
@@ -392,7 +393,68 @@ def continue_owned_lab_after_reviewed_privacy_notice(version_lines):
     STATE['privacyNoticeAcknowledgement']['tapCommandCompleted']=True;STATE['ownedLabNavigation']={'action':'android.intent.action.VIEW','package':'com.android.chrome','url':OWNED_LAB_URL,'attempts':1};save()
     run([ADB,'-s',SERIAL,'shell',view_command],'navigate_owned_v15_with_action_view',timeout=15)
     STATE['ownedLabNavigation']['commandCompleted']=True;observe_owned_lab_native_ui()
-    STATE['status']='STOP_AFTER_OWNED_LAB_NATIVE_OBSERVATIONS_REQUIRES_REVIEW'
+    if observe_menu:open_owned_chrome_menu_and_observe(version_lines)
+    else:STATE['status']='STOP_AFTER_OWNED_LAB_NATIVE_OBSERVATIONS_REQUIRES_REVIEW'
+
+OWNED_MENU_OBSERVATION_FLAG='--observe-owned-v15-chrome-menu'
+OWNED_CANONICAL_ADDRESS='comma-connect-fix-lab-20261016.zippy17.chatgpt.site/acced17acced1701/0000010a--a51155e496/1.001/3.999?candidate=v15&experiment=nqa'
+
+def owned_chrome_menu_target(xml,png,version_lines):
+    if {line.removeprefix('versionName=') for line in version_lines if line.startswith('versionName=')}!={'124.0.6367.219'}:raise Refused('REVIEWED_MENU_CHROME_VERSION_REQUIRED')
+    if len(xml)>2*1024*1024 or b'<!DOCTYPE' in xml.upper() or b'<!ENTITY' in xml.upper():raise Refused('OWNED_MENU_XML_INVALID')
+    tree=ET.fromstring(xml);package='com.android.chrome';prefix=package+':id/'
+    packages={e.get('package') for e in tree.iter() if e.get('package')}
+    if package not in packages or not packages.issubset({package,'android','com.android.systemui'}):raise Refused('OWNED_MENU_FOREGROUND_REQUIRED')
+    if len(png)<24 or png[:8]!=b'\x89PNG\r\n\x1a\n' or png[12:16]!=b'IHDR':raise Refused('OWNED_MENU_SCREEN_DIMENSIONS_REQUIRED')
+    width=int.from_bytes(png[16:20],'big');height=int.from_bytes(png[20:24],'big')
+    if not(0<width<=16384 and 0<height<=16384):raise Refused('OWNED_MENU_SCREEN_DIMENSIONS_REQUIRED')
+    eligible={}
+    def walk(e,visible=True):
+        visible=visible and e.get('enabled')!='false' and e.get('visible-to-user')!='false' and e.get('displayed')!='false';eligible[id(e)]=visible
+        for child in e:walk(child,visible)
+    walk(tree)
+    def one(nodes,klass,clickable):
+        if len(nodes)!=1:raise Refused('UNIQUE_OWNED_MENU_CONTEXT_NODE_REQUIRED')
+        e=nodes[0]
+        if not eligible[id(e)] or e.get('package')!=package or e.get('class')!=klass or e.get('enabled')!='true' or e.get('clickable')!=clickable:raise Refused('OWNED_MENU_CONTEXT_NODE_MISMATCH')
+        m=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',e.get('bounds',''))
+        if not m:raise Refused('OWNED_MENU_CONTEXT_BOUNDS_REQUIRED')
+        r=list(map(int,m.groups()));x0,y0,x1,y1=r
+        if not(0<=x0<x1<=width and 0<=y0<y1<=height):raise Refused('OWNED_MENU_CONTEXT_BOUNDS_REQUIRED')
+        return e,r
+    address,_=one([e for e in tree.iter() if e.get('resource-id')==prefix+'url_bar'],'android.widget.EditText','true')
+    if address.get('text') not in [OWNED_CANONICAL_ADDRESS,'https://'+OWNED_CANONICAL_ADDRESS] or address.get('content-desc','')!='':raise Refused('EXACT_OWNED_CANONICAL_ADDRESS_REQUIRED')
+    webview,web_rect=one([e for e in tree.iter() if e.get('class')=='android.webkit.WebView'],'android.webkit.WebView','false')
+    if webview.get('text')!='Candidate native integrated · healthy':raise Refused('REVIEWED_OWNED_WEBVIEW_CONTEXT_REQUIRED')
+    one([e for e in tree.iter() if e.get('text')=='V15 aca842c376c4'],'android.view.View','false')
+    menu,r=one([e for e in tree.iter() if e.get('resource-id')==prefix+'menu_button'],'android.widget.ImageButton','true')
+    if menu.get('text','')!='' or menu.get('content-desc')!='Customize and control Google Chrome':raise Refused('EXACT_NATIVE_CHROME_MENU_REQUIRED')
+    x0,y0,x1,y1=r;x=(x0+x1)//2;y=(y0+y1)//2
+    if web_rect[0]<=x<web_rect[2] and web_rect[1]<=y<web_rect[3]:raise Refused('CHROME_MENU_OVERLAPS_WEB_CONTENT')
+    return {'x':x,'y':y,'bounds':r,'screen':[width,height],'resourceId':prefix+'menu_button','contentDescription':menu.get('content-desc'),'observedAddress':address.get('text'),'badge':'V15 aca842c376c4','webViewClass':webview.get('class'),'scope':'Native context only; badge is not a full byte-pin or installed-PWA proof.'}
+
+def open_owned_chrome_menu_and_observe(version_lines):
+    capture_start=time.monotonic();screen('owned-v15-before-native-chrome-menu')
+    xml=(OUT/'owned-v15-before-native-chrome-menu.xml').read_bytes();png=(OUT/'owned-v15-before-native-chrome-menu.png').read_bytes()
+    target=owned_chrome_menu_target(xml,png,version_lines);age=time.monotonic()-capture_start
+    if not(0<=age<=10):raise Refused('OWNED_MENU_SNAPSHOT_TOO_OLD')
+    STATE['ownedChromeMenuInput']={'explicitObservationFlag':True,'attempts':1,'target':target,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'snapshotAgeUpperBoundSeconds':age,'installOrAddHomeActions':0}
+    STATE['UIInputCommands']=STATE.get('UIInputCommands',0)+1;save()
+    run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_owned_native_chrome_menu',timeout=5)
+    start=time.monotonic();deadline=min(start+70,START+CAP);rows=[];STATE['ownedChromeMenuObservations']=rows
+    transient={'UI_DUMP_REPORTED_ERROR','UI_DUMP_SUCCESS_MARKER_REQUIRED','UI_XML_INVALID','OWN_COMMAND_FAILED_ui_dump','OWN_COMMAND_FAILED_ui_xml','OWN_COMMAND_TIMEOUT_ui_dump','OWN_COMMAND_TIMEOUT_ui_xml','OWN_COMMAND_TIMEOUT_screen_png','CHROME_SCREEN_OBSERVATION_DEADLINE'}
+    for attempt in range(1,4):
+        delay=start+(attempt-1)*20-time.monotonic()
+        if delay>0:time.sleep(min(delay,max(0,deadline-time.monotonic())))
+        if time.monotonic()>=deadline:break
+        label='owned-v15-native-chrome-menu-'+str(attempt);row={'attempt':attempt,'label':label};rows.append(row)
+        try:screen(label,observation_deadline=deadline)
+        except Refused as error:
+            if str(error) not in transient:raise
+            row['status']='FRESH_XML_UNAVAILABLE';row['code']=str(error);save();continue
+        row['xmlFreshnessVerified']=True;row['xmlSHA256']=hashlib.sha256((OUT/(label+'.xml')).read_bytes()).hexdigest();row['pngSHA256']=hashlib.sha256((OUT/(label+'.png')).read_bytes()).hexdigest();save()
+    STATE['ownedChromeMenuOutcome']='OBSERVATIONS_REQUIRE_REVIEW_NO_POPUP_ROW_OR_INSTALL_VERDICT'
+    STATE['status']='STOP_AFTER_CHROME_MENU_OBSERVATIONS_REQUIRES_REVIEW'
 
 def listener_guard():
     data,_,_=run(['ss','-ltn'],'selected_listeners')
