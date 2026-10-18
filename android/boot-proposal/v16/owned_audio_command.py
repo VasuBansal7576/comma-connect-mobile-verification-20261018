@@ -30,8 +30,16 @@ def run_owned(command,logpath,seconds):
   if source.exists():logpath.write_bytes(source.read_bytes())
   for sig,handler in previous.items():signal.signal(sig,handler)
  result['ok']=not result['timedOut']and result.get('returnCode')==0 and result['cleanupVerified'];return result
-if __name__=='__main__':
- if os.environ.get('GITHUB_ACTIONS')!='true'or os.environ.get('RUNNER_OS')!='Linux'or os.environ.get('RUNNER_ARCH')!='X64':raise SystemExit('Hosted Linux only')
+def dependency_main(argv):
+ if argv!=['--install-deps-root']:raise SystemExit('Exact fixed root dependency operation only')
+ if os.uname().sysname!='Linux' or os.environ.get('GITHUB_ACTIONS')!='true'or os.environ.get('RUNNER_OS')!='Linux'or os.environ.get('RUNNER_ARCH')!='X64':raise SystemExit('Hosted Linux only')
+ # Apt's privileged descendants must have the same UID as their owning subreaper.
+ # Imported run_owned remains unchanged for all normal runner-UID acquisition callers.
+ if os.getuid()!=0 or os.geteuid()!=0:raise SystemExit('Dependency subreaper must start as root')
  out=Path('evidence/android-audio-deps');out.mkdir(exist_ok=False)
- command=['sudo','-n','env','DEBIAN_FRONTEND=noninteractive','apt-get','-y','--no-install-recommends','install','gcc','pkg-config','libpulse-dev']
- r=run_owned(command,out/'install.log',120);(out/'receipt.json').write_text(json.dumps(r,indent=2)+'\n');raise SystemExit(0 if r['ok']else 2)
+ command=['env','DEBIAN_FRONTEND=noninteractive','apt-get','-y','--no-install-recommends','install','gcc','pkg-config','libpulse-dev']
+ r=run_owned(command,out/'install.log',120);r['dependencyOwnerUID']=os.getuid();r['dependencyMode']='FIXED_ROOT_APT_ONLY'
+ (out/'receipt.json').write_text(json.dumps(r,indent=2)+'\n');return 0 if r['ok']else 2
+if __name__=='__main__':
+ import sys
+ raise SystemExit(dependency_main(sys.argv[1:]))

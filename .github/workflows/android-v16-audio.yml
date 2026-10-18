@@ -71,7 +71,7 @@ jobs:
       - name: Exact Ubuntu native collector build dependencies
         if: inputs.owner_reviewed_remote_prerequisites
         timeout-minutes: 3
-        run: python3 android/boot-proposal/v16/owned_audio_command.py
+        run: sudo -n env GITHUB_ACTIONS=true RUNNER_OS=Linux RUNNER_ARCH=X64 python3 android/boot-proposal/v16/owned_audio_command.py --install-deps-root
       - name: Explicit V16 installed native source and150s capture
         id: boot
         if: inputs.owner_reviewed_remote_prerequisites
