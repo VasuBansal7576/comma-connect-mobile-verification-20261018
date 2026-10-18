@@ -1021,7 +1021,8 @@ def launch_observed_owned_pwa(version_lines):
     STATE['ownedPWAIconInput']['tapCommandCompleted']=True;STATE['ownedPWAIconInput']['completedInputOrdinal']=STATE['UIInputCommands'];save()
     native_package_presence('after-page-search')
     # No further native input; actual page/socket schema is observed below, never assumed.
-    screen('owned-v16-after-installed-icon',observation_deadline=min(time.monotonic()+30,START+CAP))
+    post_icon=fresh_input_snapshot('owned-v16-after-installed-icon')
+    STATE['postIconReadonlySnapshot']={'label':post_icon['label'],'captureStartBootSeconds':post_icon['captureStartMonotonic']-START,'captureCompleteBootSeconds':post_icon['captureCompleteMonotonic']-START,'inputRetries':0,'scope':'Bounded fresh native XML/screenshot only; installed standalone/source verification remains below.'};save()
     STATE['status']='STOP_OWNED_ICON_LAUNCHED_STANDALONE_NOT_YET_PROVED';save()
     observe_installed_pwa_readonly()
     audio_acquire.acquire(sys.modules[__name__])
