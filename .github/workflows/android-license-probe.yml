@@ -1,0 +1,26 @@
+name: Existing SDK parsed license hashes only
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Parse official metadata with existing SDK jars; no package or license mutation
+        run: python3 android/license-probe/probe.py
+      - name: Retain nonsecret parser/hash evidence, including refusal
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: existing-sdk-license-parser-${{ github.run_id }}
+          path: |
+            evidence/android-license-parser/receipt.json
+            evidence/android-license-parser/sdk-result.json
+            evidence/android-license-parser/*-diagnostic.txt
+          retention-days: 3
+          if-no-files-found: error
