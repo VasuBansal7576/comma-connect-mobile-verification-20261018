@@ -22,6 +22,7 @@ static pa_mainloop *loop; static pa_context *context; static pa_stream *stream;
 static pa_operation *timing_operation;
 static double timing_request_at,last_timing_request;
 static uint64_t timing_requests,timing_replies;
+static int final_timing_complete;
 static FILE *pcm,*events; static uint64_t frames,sequence,event_sequence,holes;
 static int failed,ready,stopping,data_ready,index_basis_set; static int64_t index_basis; static double began,ready_at,stop_at;
 static uint32_t source_output_index=PA_INVALID_INDEX,monitor_index=PA_INVALID_INDEX; static unsigned duration;
@@ -44,13 +45,16 @@ static void timing_reply(pa_stream*s,int success,void*u){
     if(fputs("}\n",events)==EOF)failed=1;
     if(!success||!ti||ti->read_index_corrupt||ti->write_index_corrupt)refuse("pulse-timing-refresh-error",success);
 }
+static void request_timing(double now){
+    last_timing_request=timing_request_at=now;timing_requests++;event("timing-refresh-request",(int)timing_requests);
+    timing_operation=pa_stream_update_timing_info(stream,timing_reply,NULL);
+    if(!timing_operation)refuse("pulse-timing-refresh-start-error",1);
+}
 static void refresh_timing(double now){
     if(!ready||stopping||failed)return;
     if(timing_operation){if(now-timing_request_at>=2.0)refuse("pulse-timing-refresh-deadline-error",1);return;}
     if(now-last_timing_request<0.5)return;
-    last_timing_request=timing_request_at=now;timing_requests++;event("timing-refresh-request",(int)timing_requests);
-    timing_operation=pa_stream_update_timing_info(stream,timing_reply,NULL);
-    if(!timing_operation)refuse("pulse-timing-refresh-start-error",1);
+    request_timing(now);
 }
 static void overflow(pa_stream*s,void*u){(void)s;(void)u;refuse("pulse-overflow",1);}
 static void moved(pa_stream*s,void*u){(void)s;(void)u;refuse("pulse-device-moved",1);}
@@ -135,9 +139,22 @@ int main(int argc,char**argv){
  done:
     stop_at=mono();stopping=1;alarm(5);event("capture-stop",failed);
     if(timing_operation){pa_operation_cancel(timing_operation);pa_operation_unref(timing_operation);timing_operation=NULL;event("timing-refresh-cancel-at-stop",0);}
+    /* Sample writes are frozen by stopping=1. Request metadata after that final
+     * batch, within the existing five-second cleanup watchdog. No PCM is added. */
+    if(!failed&&ready&&stream&&pa_stream_get_state(stream)==PA_STREAM_READY){
+        event("timing-refresh-final-begin",(int)(timing_requests+1));request_timing(mono());
+        double until=mono()+2.0;
+        while(timing_operation&&!failed){
+            if(mono()>=until){refuse("pulse-final-timing-deadline-error",1);break;}
+            int ret=0;if(pa_mainloop_iterate(loop,0,&ret)<0){refuse("pulse-final-timing-mainloop-error",ret);break;}
+            struct timespec delay={0,1000000};nanosleep(&delay,NULL);
+        }
+        final_timing_complete=!failed&&!timing_operation;event("timing-refresh-final-end",final_timing_complete);
+        if(timing_operation){pa_operation_cancel(timing_operation);pa_operation_unref(timing_operation);timing_operation=NULL;event("timing-refresh-cancel-at-stop",0);}
+    }
     int disconnected=1;if(stream){if(pa_stream_disconnect(stream)<0)disconnected=0;pa_stream_unref(stream);}if(context){pa_context_disconnect(context);pa_context_unref(context);}if(loop)pa_mainloop_free(loop);
     int file_ok=fflush(pcm)==0;if(fclose(pcm))file_ok=0;int journal_ok=fflush(events)==0;if(fclose(events))journal_ok=0;
     FILE*out=fopen(argv[4],"wx");if(!out)return 2;
-    int ok=!failed&&ready&&data_ready&&frames>0&&holes==0&&file_ok&&journal_ok&&disconnected;
-    fprintf(out,"{\"schema\":\"native-private-pulse-monitor-capture-v1\",\"libraryVersion\":\"%s\",\"sampleRate\":48000,\"channels\":2,\"sampleFormat\":\"float32-le-interleaved\",\"frames\":%"PRIu64",\"fragments\":%"PRIu64",\"explicitHoleBytes\":%"PRIu64",\"requestedCaptureSeconds\":%u,\"capturePID\":%ld,\"pulseSourceOutputIndex\":%u,\"pulseMonitorIndex\":%u,\"dataReadinessObserved\":%s,\"captureElapsedSeconds\":%.9f,\"processElapsedSeconds\":%.9f,\"independentProcessDeadlineSeconds\":%u,\"cleanupDeadlineSeconds\":5,\"streamDisconnected\":%s,\"pcmFileClosed\":%s,\"journalFileClosed\":%s,\"nativeCaptureComplete\":%s,\"explicitTimingRefreshIntervalMilliseconds\":500,\"explicitTimingRefreshDeadlineMilliseconds\":2000,\"explicitTimingRefreshRequests\":%"PRIu64",\"explicitTimingRefreshReplies\":%"PRIu64",\"independentPerPacketPTSProvided\":false,\"microphoneRequested\":false,\"sourceContextOrNonceInvented\":false,\"functionalPWAQualificationClaimed\":false}\n",library_version,frames,sequence,holes,duration,(long)getpid(),source_output_index,monitor_index,data_ready?"true":"false",ready?stop_at-ready_at:0,mono()-began,duration==150u?170u:30u,disconnected?"true":"false",file_ok?"true":"false",journal_ok?"true":"false",ok?"true":"false",timing_requests,timing_replies);if(fclose(out))ok=0;alarm(0);return ok?0:2;
+    int ok=!failed&&ready&&data_ready&&final_timing_complete&&frames>0&&holes==0&&file_ok&&journal_ok&&disconnected;
+    fprintf(out,"{\"schema\":\"native-private-pulse-monitor-capture-v1\",\"libraryVersion\":\"%s\",\"sampleRate\":48000,\"channels\":2,\"sampleFormat\":\"float32-le-interleaved\",\"frames\":%"PRIu64",\"fragments\":%"PRIu64",\"explicitHoleBytes\":%"PRIu64",\"requestedCaptureSeconds\":%u,\"capturePID\":%ld,\"pulseSourceOutputIndex\":%u,\"pulseMonitorIndex\":%u,\"dataReadinessObserved\":%s,\"captureElapsedSeconds\":%.9f,\"processElapsedSeconds\":%.9f,\"independentProcessDeadlineSeconds\":%u,\"cleanupDeadlineSeconds\":5,\"streamDisconnected\":%s,\"pcmFileClosed\":%s,\"journalFileClosed\":%s,\"nativeCaptureComplete\":%s,\"finalTimingRefreshComplete\":%s,\"sampleWritesFrozenBeforeFinalTimingQuery\":true,\"explicitTimingRefreshIntervalMilliseconds\":500,\"explicitTimingRefreshDeadlineMilliseconds\":2000,\"explicitTimingRefreshRequests\":%"PRIu64",\"explicitTimingRefreshReplies\":%"PRIu64",\"independentPerPacketPTSProvided\":false,\"microphoneRequested\":false,\"sourceContextOrNonceInvented\":false,\"functionalPWAQualificationClaimed\":false}\n",library_version,frames,sequence,holes,duration,(long)getpid(),source_output_index,monitor_index,data_ready?"true":"false",ready?stop_at-ready_at:0,mono()-began,duration==150u?170u:30u,disconnected?"true":"false",file_ok?"true":"false",journal_ok?"true":"false",ok?"true":"false",final_timing_complete?"true":"false",timing_requests,timing_replies);if(fclose(out))ok=0;alarm(0);return ok?0:2;
 }

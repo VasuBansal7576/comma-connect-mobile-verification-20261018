@@ -23,6 +23,10 @@ on:
         type: boolean
         default: false
         description: Tap the reviewed Add Home menu row and capture the resulting dialog; stop before confirmation
+      observe_owned_v15_install_option_dialog:
+        type: boolean
+        default: false
+        description: Tap the observed native Install option and retain the next dialog; stop before final confirmation
 permissions:
   contents: read
 jobs:
@@ -57,7 +61,12 @@ jobs:
           OWNED_LAB_CONTINUATION: ${{ inputs.continue_to_owned_v15_lab }}
           OBSERVE_OWNED_MENU: ${{ inputs.observe_owned_v15_chrome_menu }}
           OBSERVE_ADD_HOME: ${{ inputs.observe_owned_v15_add_home_dialog }}
+          OBSERVE_INSTALL_OPTION: ${{ inputs.observe_owned_v15_install_option_dialog }}
         run: |
+          if [ "$OBSERVE_INSTALL_OPTION" = true ] && [ "$OBSERVE_ADD_HOME" != true ]; then
+            echo 'Install option requires the reviewed Add Home continuation.'
+            exit 2
+          fi
           if [ "$OBSERVE_ADD_HOME" = true ] && { [ "$OBSERVE_OWNED_MENU" != true ] || [ "$OWNED_LAB_CONTINUATION" != true ] || [ "$CHROME_TERMS_APPROVED" != true ]; }; then
             echo 'Add Home observation requires all prior reviewed continuation inputs.'
             exit 2
@@ -66,7 +75,9 @@ jobs:
             echo 'Menu observation requires the explicit owned lab continuation.'
             exit 2
           fi
-          if [ "$OBSERVE_ADD_HOME" = true ]; then
+          if [ "$OBSERVE_INSTALL_OPTION" = true ]; then
+            python3 android/boot-proposal/boot.py --approve-chrome-124-terms-without-account --continue-owned-v15-lab-after-privacy-notice --observe-owned-v15-chrome-menu --observe-owned-v15-add-home-dialog --observe-owned-v15-install-option-dialog
+          elif [ "$OBSERVE_ADD_HOME" = true ]; then
             python3 android/boot-proposal/boot.py --approve-chrome-124-terms-without-account --continue-owned-v15-lab-after-privacy-notice --observe-owned-v15-chrome-menu --observe-owned-v15-add-home-dialog
           elif [ "$CHROME_TERMS_APPROVED" = true ] && [ "$OWNED_LAB_CONTINUATION" = true ] && [ "$OBSERVE_OWNED_MENU" = true ]; then
             python3 android/boot-proposal/boot.py --approve-chrome-124-terms-without-account --continue-owned-v15-lab-after-privacy-notice --observe-owned-v15-chrome-menu
@@ -82,7 +93,9 @@ jobs:
           fi
       - name: Always clean bound owned processes and restore KVM ACL
         if: always() && inputs.owner_reviewed_remote_prerequisites
-        run: python3 android/boot-proposal/boot.py --cleanup
+        run: |
+          python3 android/boot-proposal/boot.py --cleanup
+          python3 -c 'import json; from pathlib import Path; r=json.loads(Path("evidence/android-boot/receipt.json").read_text()); assert r.get("ownedChildCleanupVerified") is True and r.get("KVMACLChanged") is False and r.get("ownedADBServerCleanupExitCode") == 0, "Final owned-process, ADB and KVM cleanup is unverified"'
       - name: Retain prerequisite receipts, selected UI and bounded sanitized logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
