@@ -107,7 +107,7 @@ extension V16InstalledUITests {
         launchHomeIcon(requireAudioControls: false)
         try urlMenu()
         try urlTapLink("V16 referrals alias controls")
-        _ = text("(?s)Refer a friend,.*Get \\$50\\.", in: host, timeout: 15)
+        try requireNativeReferralsHeading()
         let initial = try urlSnapshot("referrals-initial")
         try urlTapControl("referrals") // actual product gift/header toggle
         let closed = try urlSnapshot("referrals-closed")

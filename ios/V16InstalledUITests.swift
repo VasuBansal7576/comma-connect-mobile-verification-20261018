@@ -350,7 +350,7 @@ import Network
                 throw CIWireError.refused("Unique actual destination Pin control required before audio measurement")
             }
         case "V16 URL/state controls": try requireDestinationText("Device settings")
-        case "V16 referrals alias controls": try requireDestinationText("(?s)Refer a friend,.*Get \\$50\\.")
+        case "V16 referrals alias controls": try requireNativeReferralsHeading()
         default:
             nativeEnsureMainOpen(in: host)
             let nativeSummary = host.buttons.matching(identifier: "Native failure input controls")
@@ -367,6 +367,36 @@ import Network
             }
         }
     }
+    private func requireNativeReferralsHeading() throws {
+        let mains = host.otherElements.matching(NSPredicate(format: "label == %@", "main"))
+        guard mains.firstMatch.waitForExistence(timeout: 15), mains.count == 1 else {
+            throw CIWireError.refused("Unique actual referrals main owner required")
+        }
+        let main = mains.element
+        let headings = main.otherElements.matching(NSPredicate(format: "label == %@", "Refer a friend,\nGet $50."))
+        guard headings.count == 1, headings.element.exists else {
+            throw CIWireError.refused("Unique actual referrals Other heading required")
+        }
+        let heading = headings.element
+        let first = heading.staticTexts.matching(NSPredicate(format: "label == %@", "Refer a friend,"))
+        let second = heading.staticTexts.matching(NSPredicate(format: "label == %@", "Get $50."))
+        guard heading.staticTexts.count == 2, first.count == 1, second.count == 1,
+              first.element.exists, second.element.exists else {
+            throw CIWireError.refused("Exact two actual referrals heading children required")
+        }
+        let mainFrame = main.frame, headingFrame = heading.frame
+        let firstFrame = first.element.frame, secondFrame = second.element.frame
+        func finitePositive(_ frame: CGRect) -> Bool {
+            frame.origin.x.isFinite && frame.origin.y.isFinite && frame.width.isFinite && frame.height.isFinite
+                && frame.width > 0 && frame.height > 0
+        }
+        guard [mainFrame, headingFrame, firstFrame, secondFrame].allSatisfy(finitePositive),
+              mainFrame.contains(headingFrame), headingFrame.contains(firstFrame), headingFrame.contains(secondFrame),
+              secondFrame.minY > firstFrame.minY else {
+            throw CIWireError.refused("Actual referrals heading owner/child geometry required")
+        }
+    }
+
     private func nativeMenuEntry() throws {
         if reviewedCurrentMenu() { return }
         revealEvidenceMenu()
@@ -648,6 +678,18 @@ import Network
         // Actual standalone proof is checked later in the unmodified source rows, not invented here.
         installCheckpoint("install.end")
     }
+    private func audioRevealAndTap(_ name: String) throws {
+        guard ["Prepare playback", "Start pilot and run", "Start bare native"].contains(name) else {
+            throw CIWireError.refused("Unreviewed audio action visibility request")
+        }
+        guard let target = nativeReveal(host.buttons.matching(identifier: name),
+            name: name, in: host, insideDock: true),
+            target.exists, target.isEnabled, target.isHittable else {
+            throw CIWireError.refused("Actual audio action must be revealed inside the current dock before input: " + name)
+        }
+        uniqueTap(name, in: host)
+    }
+
     private func audioFreshEntryFromCurrentMenu() throws {
         XCTAssertEqual(host.state, .runningForeground)
         try nativeMenuEntry()
@@ -663,7 +705,7 @@ import Network
         // Reveal the existing original status; no helper/source changes. Fail if summary AX differs.
         nativeSummaryTap("V16 OS audio test", in: host)
         let pinAX = text("playlist=PINNED assets=6 .*", in: host, timeout: 20).label
-        uniqueTap("Prepare playback", in: host)
+        try audioRevealAndTap("Prepare playback")
         let preparedAX = text("READY: native playing and unmuted\\..*", in: host, timeout: 12).label
         screen("v16-prepared-unmuted")
         // Collapse original detail to keep quick actions visible and huge later Export text out of AX.
@@ -676,13 +718,13 @@ import Network
         attachment("v16-actual-close-AX", "type=\(close.elementType.rawValue); label=\(close.label)")
         // Xcode bootstrap is outside capture. Host ACK must precede this real pilot/run tap.
         try waitForOwnedCapture(pin: pinAX, prepared: preparedAX)
-        uniqueTap("Start pilot and run", in: host)
+        try audioRevealAndTap("Start pilot and run")
         _ = text("RUNNING: original pilot and product phases armed once\\.", in: host, timeout: 8)
         screen("v16-original-protocol-running")
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate { _,_ in !close.exists }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 48), .completed, "Actual Close not observed")
         screen("v16-after-actual-product-close")
-        uniqueTap("Start bare native", in: host)
+        try audioRevealAndTap("Start bare native")
         nativeSummaryTap("V16 OS audio test", in: host)
         _ = text("playlist=PINNED assets=6 bare-native source=LIVE .*", in: host, timeout: 8)
         let cleanupAX = text("playlist=PINNED assets=6 bare-native source=stopped .*cleanup=true", in: host, timeout: 25).label
