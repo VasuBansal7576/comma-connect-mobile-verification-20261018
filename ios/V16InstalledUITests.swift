@@ -73,6 +73,53 @@ import Network
         return audio.count == 1 && audio.element.exists && urls.count == 1 && urls.element.exists
             && badge.firstMatch.exists
     }
+    private func nativeMainChildPresent(in app: XCUIApplication) -> Bool {
+        app.buttons["Pin actual playlist"].exists
+            || app.buttons["Evidence export"].exists || app.otherElements["Evidence export"].exists
+            || app.buttons["Native failure input controls"].exists || app.otherElements["Native failure input controls"].exists
+    }
+    private func nativeEnsureDisclosureOpen(_ name: String, in app: XCUIApplication,
+                                            childExists: @escaping () -> Bool) {
+        if childExists() { return } // A present offscreen child is still proof that this disclosure is open.
+        func summaryState() -> (count: Int, value: String?) {
+            let buttons = app.buttons.matching(identifier: name)
+            let query = buttons.firstMatch.exists ? buttons : app.otherElements.matching(identifier: name)
+            let count = query.count
+            return (count, count == 1 && query.element.exists ? query.element.value as? String : nil)
+        }
+        func retain(_ stage: String, _ state: (count: Int, value: String?), child: Bool) {
+            let facts: [String: Any] = ["summary": name, "summaryCount": state.count,
+                "summaryValue": state.value.map { String($0.prefix(256)) as Any } ?? NSNull(),
+                "knownChildPresent": child, "scope": "Native disclosure navigation only; no source/media/phase assignments."]
+            let data = (try? JSONSerialization.data(withJSONObject: facts, options: [.sortedKeys])) ?? Data()
+            attachment("v16-disclosure-" + stage, String(decoding: data, as: UTF8.self))
+        }
+        func waitForChild() -> Bool {
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in childExists() }, object: nil)
+            return XCTWaiter.wait(for: [ready], timeout: 8) == .completed
+        }
+        let before = summaryState()
+        retain("before", before, child: false)
+        // Explicit expanded native state with a late child must never be toggled closed.
+        let performedPrimary = before.value?.hasPrefix("▾") != true
+        if performedPrimary { nativeSummaryTap(name, in: app) }
+        var ready = waitForChild()
+        if !ready && performedPrimary && !childExists() {
+            let after = summaryState()
+            retain("after-primary", after, child: false)
+            // The actual retained iOS AX collapsed marker qualifies this sole additional input.
+            if after.count == 1, after.value?.hasPrefix("▸") == true {
+                nativeSummaryTap(name, in: app)
+                ready = waitForChild()
+            }
+        }
+        retain("complete", summaryState(), child: ready)
+        XCTAssertTrue(ready, "Actual disclosure child required after bounded expansion: " + name)
+    }
+    private func nativeEnsureMainOpen(in app: XCUIApplication) {
+        nativeEnsureDisclosureOpen("V16 verification controls", in: app,
+            childExists: { self.nativeMainChildPresent(in: app) })
+    }
     private func nativeReveal(_ query: XCUIElementQuery, name: String, in app: XCUIApplication,
                               insideDock: Bool, maxSwipes: Int = 12) -> XCUIElement? {
         for swipes in 0...maxSwipes {
@@ -89,11 +136,6 @@ import Network
                 guard summaries.count == 1 else { XCTFail("Unique actual dock summary required"); return nil }
                 let top = summaries[0].frame.maxY
                 viewport = CGRect(x: viewport.minX, y: top, width: viewport.width, height: viewport.maxY - top)
-            }
-            // Offscreen WebKit AX can expose CGRect.zero. This is not native frame proof.
-            if frame == .zero && !insideDock && target.elementType == .link && reviewedCurrentMenu() {
-                attachment("v16-menu-native-autoreveal", "Unique enabled reviewed-current-menu Link has CGRect.zero; allowing ONE framework native tap. No coordinates, force or retry; destination and current badge remain required.")
-                return target
             }
             let values = [frame.minX, frame.minY, frame.width, frame.height,
                           viewport.minX, viewport.minY, viewport.width, viewport.height]
@@ -113,9 +155,7 @@ import Network
             guard after.count == 1 else { XCTFail("Reveal target changed ownership/uniqueness: " + name); return nil }
             let next = after[0].frame
             let progressed = direction == "up" ? next.minY < frame.minY : next.minY > frame.minY
-            let unmeasuredCurrentMenuLink = next == .zero && !insideDock
-                && after[0].elementType == .link && reviewedCurrentMenu()
-            guard after[0].isHittable || progressed || unmeasuredCurrentMenuLink else {
+            guard after[0].isHittable || progressed else {
                 XCTFail("No observed target-frame progress after native gesture: " + name); return nil
             }
         }
@@ -129,6 +169,143 @@ import Network
             if evidence { nativeSummaryTap("V16 verification controls", in: host) }
             nativeSummaryTap("Declared browser navigation", in: host)
             XCTAssertFalse(back.firstMatch.exists, "Actual history child must disappear before Evidence Menu lookup")
+        }
+    }
+    private func reviewedMenuCenterGeometry(app: CGRect, heading: CGRect, dock: CGRect,
+                                            link: CGRect, center: CGPoint) -> Bool {
+        let rectangles = [app, heading, dock, link]
+        guard rectangles.allSatisfy({ rect in
+            [rect.minX, rect.minY, rect.width, rect.height].allSatisfy { $0.isFinite }
+                && rect.width > 0 && rect.height > 0
+        }), center.x.isFinite, center.y.isFinite else { return false }
+        guard app.contains(heading), app.contains(dock), app.contains(link),
+              heading.maxY < dock.minY,
+              link.minY > heading.maxY, link.maxY < dock.minY else { return false }
+        return center.x == link.midX && center.y == link.midY
+            && center.x > link.minX && center.x < link.maxX
+            && center.y > link.minY && center.y < link.maxY
+            && center.y > heading.maxY && center.y < dock.minY
+    }
+    private func nativeReviewedMenuCenterTap(_ label: String, query: XCUIElementQuery) throws {
+        func refusal(_ why: String) -> CIWireError {
+            attachment("v16-menu-center-refused", why)
+            return CIWireError.refused("Reviewed menu center input refused: " + why)
+        }
+        guard host.state == .runningForeground, reviewedCurrentMenu() else {
+            throw refusal("Same current frontmost reviewed Menu required")
+        }
+        let headings = host.staticTexts.matching(NSPredicate(format: "label == %@", "Current V16 checks"))
+        let docks = host.otherElements.matching(identifier: "V16 verification controls")
+        guard headings.count == 1, headings.element.exists, headings.element.isHittable,
+              docks.count == 1, docks.element.exists,
+              docks.element.elementType == .other,
+              docks.element.identifier == "V16 verification controls",
+              query.count == 1, query.element.exists, query.element.isEnabled,
+              query.element.isHittable, query.element.elementType == .link,
+              query.element.label == label else {
+            throw refusal("Fresh unique visible Site38 heading/outer dock and unique enabled hittable reviewed Link required")
+        }
+        let heading = headings.element, dock = docks.element, target = query.element
+        let appFrame = host.frame, headingFrame = heading.frame, dockFrame = dock.frame, linkFrame = target.frame
+        let coordinate = target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let point = coordinate.screenPoint
+        let facts: [String: Any] = ["label": label, "attempt": 2,
+            "appFrame": String(describing: appFrame), "headingFrame": String(describing: headingFrame),
+            "outerDockFrame": String(describing: dockFrame), "linkFrame": String(describing: linkFrame),
+            "centerScreenPoint": String(describing: point),
+            "scope": "Sole second native input: current element normalized center, never absolute historical coordinates. Full Link must lie strictly below current heading and above outer dock."]
+        attachment("v16-menu-center-geometry", String(decoding: try JSONSerialization.data(withJSONObject: facts, options: [.sortedKeys]), as: UTF8.self))
+        guard reviewedMenuCenterGeometry(app: appFrame, heading: headingFrame, dock: dockFrame,
+                                        link: linkFrame, center: point) else {
+            throw refusal("Unknown/nonpositive/nonfinite/outside/overlapping body geometry or noncenter dynamic coordinate")
+        }
+        // Re-resolve all ownership, visibility and geometry after recording; no stale-frame retry.
+        guard host.state == .runningForeground, reviewedCurrentMenu(),
+              headings.count == 1, headings.element.exists, headings.element.isHittable,
+              docks.count == 1, docks.element.exists,
+              docks.element.identifier == "V16 verification controls",
+              query.count == 1, query.element.exists, query.element.isEnabled,
+              query.element.isHittable, query.element.elementType == .link, query.element.label == label,
+              host.frame == appFrame, headings.element.frame == headingFrame,
+              docks.element.frame == dockFrame, query.element.frame == linkFrame,
+              coordinate.screenPoint == point else {
+            throw refusal("Native source/menu/element/frame changed before second input")
+        }
+        coordinate.tap()
+    }
+    private func nativeTapReviewedMenuLink(_ label: String) throws {
+        let allowed = ["V16 silent OS audio comparison", "V16 URL/state controls",
+            "V16 referrals alias controls", "V16 natural EOF 20-second request",
+            "Native MediaError and ordinary Play /nf"]
+        guard allowed.contains(label) else { throw CIWireError.refused("Unreviewed menu destination") }
+        let query = host.links.matching(NSPredicate(format: "label == %@", label))
+        var departed = false
+        for attempt in 1...2 {
+            let headings = host.staticTexts.matching(NSPredicate(format: "label == %@", "Current V16 checks"))
+            guard host.state == .runningForeground, reviewedCurrentMenu(),
+                  headings.count == 1, headings.element.exists else {
+                throw CIWireError.refused("Current source/Site38 heading/menu and installed foreground host required before menu input")
+            }
+            guard query.firstMatch.waitForExistence(timeout: 8) else {
+                throw CIWireError.refused("Reviewed native menu Link missing")
+            }
+            let hits = query.allElementsBoundByIndex.filter { $0.exists }
+            guard hits.count == 1, hits[0].isEnabled, hits[0].elementType == .link else {
+                throw CIWireError.refused("Unique enabled reviewed native menu Link required")
+            }
+            let target = hits[0]
+            let before: [String: Any] = ["label": label, "attempt": attempt,
+                "hittable": target.isHittable, "frame": String(describing: target.frame),
+                "reviewedCurrentMenu": true, "hostStateRaw": host.state.rawValue,
+                "scope": "First input is native AX tap; sole second input requires fresh Site38 safe-body center proof. Maximum two; no force/manual swipe/URL command."]
+            attachment("v16-menu-before-input", String(decoding: try JSONSerialization.data(withJSONObject: before, options: [.sortedKeys]), as: UTF8.self))
+            if attempt == 1 { target.tap() }
+            else { try nativeReviewedMenuCenterTap(label, query: query) }
+            let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !self.reviewedCurrentMenu() }, object: nil)
+            departed = XCTWaiter.wait(for: [changed], timeout: 8) == .completed
+            let stillMenu = reviewedCurrentMenu(), foreground = host.state == .runningForeground
+            attachment("v16-menu-after-input", "attempt=\(attempt); departed=\(departed); sameReviewedMenu=\(stillMenu); foreground=\(foreground)")
+            if departed { break }
+            // Retry only this reversible, known same-frontmost lab navigation. Other inputs never retry here.
+            guard attempt == 1 && stillMenu && foreground else { break }
+        }
+        guard departed, !reviewedCurrentMenu(), host.state == .runningForeground else {
+            throw CIWireError.refused("Actual current menu must be left in installed host before destination controls/input")
+        }
+        let badge = host.staticTexts.matching(NSPredicate(format: "label MATCHES %@", ".*V16.*e7ab13f79d01.*"))
+        guard badge.firstMatch.waitForExistence(timeout: 30) else {
+            throw CIWireError.refused("Current V16 destination source badge required before destination input")
+        }
+        func requireDestinationText(_ pattern: String) throws {
+            let matches = host.staticTexts.matching(NSPredicate(format: "label MATCHES %@", pattern))
+            guard matches.firstMatch.waitForExistence(timeout: 15), matches.count == 1,
+                  matches.element.exists else {
+                throw CIWireError.refused("Unique actual destination context required: " + pattern)
+            }
+        }
+        switch label {
+        case "V16 silent OS audio comparison":
+            ensureQuickControls(in: host)
+            let pin = host.buttons.matching(identifier: "Pin actual playlist")
+            guard pin.count == 1, pin.element.exists, pin.element.isHittable else {
+                throw CIWireError.refused("Unique actual destination Pin control required before audio measurement")
+            }
+        case "V16 URL/state controls": try requireDestinationText("Device settings")
+        case "V16 referrals alias controls": try requireDestinationText("(?s)Refer a friend,.*Get \\$50\\.")
+        default:
+            nativeEnsureMainOpen(in: host)
+            let nativeSummary = host.buttons.matching(identifier: "Native failure input controls")
+            let nativeOther = host.otherElements.matching(identifier: "Native failure input controls")
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                nativeSummary.firstMatch.exists || nativeOther.firstMatch.exists
+            }, object: nil)
+            guard XCTWaiter.wait(for: [ready], timeout: 8) == .completed else {
+                throw CIWireError.refused("Actual NF/NG controls must exist in destination before measurement")
+            }
+            let controls = nativeSummary.firstMatch.exists ? nativeSummary : nativeOther
+            guard controls.count == 1, controls.element.exists else {
+                throw CIWireError.refused("Unique actual NF/NG control owner required before measurement")
+            }
         }
     }
     private func nativeMenuEntry() throws {
@@ -151,12 +328,9 @@ import Network
 
     private func openEvidenceExport() {
         closeDeclaredNavigationIfOpen()
-        let summaries = host.buttons.matching(identifier: "Evidence export").allElementsBoundByIndex
-            + host.otherElements.matching(identifier: "Evidence export").allElementsBoundByIndex
-        // Existing offscreen child means main is already open; hittability is not open state.
-        if !summaries.contains(where: { $0.exists }) { nativeSummaryTap("V16 verification controls", in: host) }
+        nativeEnsureMainOpen(in: host)
         let menu = host.links.matching(NSPredicate(format: "label == %@", "Menu"))
-        if !menu.firstMatch.exists { nativeSummaryTap("Evidence export", in: host) }
+        nativeEnsureDisclosureOpen("Evidence export", in: host, childExists: { menu.firstMatch.exists })
         XCTAssertTrue(menu.firstMatch.waitForExistence(timeout: 8), "Actual Evidence Menu child required")
         XCTAssertEqual(menu.count, 1, "Unique Evidence Menu child required after collapsing history owner")
     }
@@ -173,42 +347,9 @@ import Network
 
     private func ensureQuickControls(in app: XCUIApplication) {
         _ = text(".*V16.*e7ab13f79d01.*", in: app, timeout: 30)
+        nativeEnsureMainOpen(in: app)
         let pin = app.buttons.matching(identifier: "Pin actual playlist")
-        let evidence = app.buttons.matching(identifier: "Evidence export")
-        func mainHasChild() -> Bool {
-            pin.firstMatch.exists || evidence.firstMatch.exists
-                || app.otherElements.matching(identifier: "Evidence export").firstMatch.exists
-        }
-        func retainState(_ stage: String, _ facts: [String: Any]) {
-            let data = (try? JSONSerialization.data(withJSONObject: facts, options: [.sortedKeys])) ?? Data()
-            attachment("v16-main-expansion-" + stage, String(decoding: data, as: UTF8.self))
-        }
-        let initiallyOpen = mainHasChild()
-        if !initiallyOpen {
-            let before = app.buttons.matching(identifier: "V16 verification controls")
-            let count = before.count
-            let value = count == 1 ? before.element.value as? String : nil
-            retainState("before", ["knownChildPresent": false, "summaryCount": count,
-                "summaryValue": value.map { String($0.prefix(256)) as Any } ?? NSNull()])
-            nativeSummaryTap("V16 verification controls", in: app)
-        }
-        var ready = pin.firstMatch.waitForExistence(timeout: 8)
-        // Retained 39120973750 AX proves this exact collapsed summary value. Pin absence
-        // alone never licenses another toggle: an open-but-late/offscreen child must remain open.
-        if !ready && !initiallyOpen && !mainHasChild() {
-            let summary = app.buttons.matching(identifier: "V16 verification controls")
-            if summary.count == 1, summary.element.exists,
-               let value = summary.element.value as? String, value.hasPrefix("▸") {
-                retainState("after-primary-before-single-retry", ["knownChildPresent": false,
-                    "pinReady": false, "summaryCount": 1, "summaryValue": String(value.prefix(256)),
-                    "reason": "Actual U+25B8 collapsed value; one additional native tap only."])
-                nativeSummaryTap("V16 verification controls", in: app)
-                ready = pin.firstMatch.waitForExistence(timeout: 8)
-            }
-        }
-        retainState("complete", ["pinReady": ready, "initiallyOpen": initiallyOpen,
-            "scope": "Observed child/disclosure navigation only; no media/source/phase mutation."])
-        XCTAssertTrue(ready, "Actual Pin child required after bounded observed main expansion")
+        XCTAssertTrue(pin.firstMatch.waitForExistence(timeout: 8), "Actual original Pin child required")
         _ = nativeReveal(pin, name: "Pin actual playlist", in: app, insideDock: true)
     }
 
@@ -449,14 +590,9 @@ import Network
         installCheckpoint("install.end")
     }
     private func audioFreshEntryFromCurrentMenu() throws {
-        // Same WebClip navigation only; a previous test can leave the actual reviewed menu open.
         XCTAssertEqual(host.state, .runningForeground)
         try nativeMenuEntry()
-        let audio = host.links.matching(NSPredicate(format: "label == %@", "V16 silent OS audio comparison"))
-        XCTAssertTrue(audio.firstMatch.waitForExistence(timeout: 12))
-        let link = try XCTUnwrap(nativeReveal(audio, name: "V16 silent OS audio comparison", in: host, insideDock: false))
-        link.tap()
-        _ = text(".*V16.*e7ab13f79d01.*", in: host, timeout: 30)
+        try nativeTapReviewedMenuLink("V16 silent OS audio comparison")
         XCTAssertTrue(host.wait(for: .runningForeground, timeout: 8), "Audio link left actual installed WebClip")
     }
 

@@ -23,21 +23,11 @@ extension V16InstalledUITests {
     }
 
     private func urlTapLink(_ label: String) throws {
-        let links = host.links.matching(NSPredicate(format: "label == %@", label))
-        XCTAssertTrue(links.firstMatch.waitForExistence(timeout: 12), "Missing exact current link: " + label)
-        let link = try XCTUnwrap(nativeReveal(links, name: label, in: host, insideDock: false))
-        link.tap()
-        _ = text(".*V16.*e7ab13f79d01.*", in: host, timeout: 30)
+        try nativeTapReviewedMenuLink(label)
     }
 
     private func urlDockOpen() {
-        // phone-prep moves evidence/owner panels inside this higher-z-index dock.
-        // Its collapsed descendants must not obstruct actual history controls.
-        let summaries = host.buttons.matching(identifier: "Evidence export").allElementsBoundByIndex
-            + host.otherElements.matching(identifier: "Evidence export").allElementsBoundByIndex
-        if !summaries.contains(where: { $0.exists }) {
-            nativeSummaryTap("V16 verification controls", in: host)
-        }
+        nativeEnsureMainOpen(in: host)
     }
 
     private func urlEvidencePanel() {
@@ -53,9 +43,8 @@ extension V16InstalledUITests {
     }
 
     private func urlHistory(_ label: String) throws {
-        // urlSnapshot closed the entire dock, not just its Evidence export child.
-        // A hittable AX locator alone does not prove a higher overlay received no tap.
-        if urlVisibleControls(label).isEmpty { nativeSummaryTap("Declared browser navigation", in: host) }
+        nativeEnsureDisclosureOpen("Declared browser navigation", in: host,
+            childExists: { self.host.buttons["Browser Back"].exists })
         try urlTapControl(label)
     }
 

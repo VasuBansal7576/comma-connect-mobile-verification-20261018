@@ -3,11 +3,7 @@
 import CoreFoundation
 extension V16InstalledUITests {
     private func nfNativeLink(_ label: String) throws {
-        let query = host.links.matching(NSPredicate(format: "label == %@", label))
-        XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 8), "Missing reviewed same-shell link: " + label)
-        let link = try XCTUnwrap(nativeReveal(query, name: label, in: host, insideDock: false))
-        link.tap()
-        _ = text(".*V16.*e7ab13f79d01.*", in: host, timeout: 30)
+        try nativeTapReviewedMenuLink(label)
     }
 
     private func nfSummaryExists(_ name: String) -> Bool {
@@ -16,19 +12,18 @@ extension V16InstalledUITests {
         return queries.contains { $0.exists }
     }
     private func nfOpenMain() {
-        // Child presence distinguishes collapsed dock from a closed nested detail.
-        // Stop on inaccessible/ambiguous actual AX instead of toggling it speculatively.
-        if !nfSummaryExists("Native failure input controls") && !nfSummaryExists("Evidence export") {
-            nativeSummaryTap("V16 verification controls", in: host)
-        }
+        nativeEnsureMainOpen(in: host)
     }
+
     private func nfOpenWitnessControls() {
         nfOpenMain()
-        if !host.buttons["Freeze actual native witness"].exists {
-            nativeSummaryTap("Native failure input controls", in: host)
-        }
+        nativeEnsureDisclosureOpen("Native failure input controls", in: host,
+            childExists: { self.host.buttons["Freeze actual native witness"].exists })
+        _ = nativeReveal(host.buttons.matching(identifier: "Freeze actual native witness"),
+            name: "Freeze actual native witness", in: host, insideDock: true)
         XCTAssertTrue(host.buttons["Freeze actual native witness"].isHittable)
     }
+
     private func nfExposeProduct() {
         XCTAssertTrue(nfSummaryExists("Native failure input controls"))
         nativeSummaryTap("V16 verification controls", in: host)
