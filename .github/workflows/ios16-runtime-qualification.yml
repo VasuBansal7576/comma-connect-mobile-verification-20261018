@@ -1,0 +1,33 @@
+name: Exact iOS16 runtime and newly owned simulator qualification
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: One exact official runtime and one new simulator only
+        timeout-minutes: 18
+        run: |
+          python3 - <<'PYCODE'
+          import hashlib,pathlib
+          assert hashlib.sha256(pathlib.Path('scripts/qualify_ios16_runtime.py').read_bytes()).hexdigest() == 'd67ada194cd5fc1f6ef2fb67a635334f01829a73acd9b6eef6ebea1b4b1e6b11'
+          assert hashlib.sha256(pathlib.Path('scripts/probe_ios16_official_client.py').read_bytes()).hexdigest() == '77821ad5b2066b8dd732463849b442c71e84237adfe084a721f2e5d04253f5a4'
+          PYCODE
+          python3 scripts/qualify_ios16_runtime.py --reviewed-ephemeral-ios16-qualification
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: ios16-runtime-qualification-${{ github.run_id }}
+          path: |
+            evidence/ios16-runtime-qualification/receipt.json
+            evidence/ios16-runtime-qualification/**/*.log
+            evidence/ios16-runtime-qualification/*.png
+          retention-days: 7
