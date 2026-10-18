@@ -204,6 +204,66 @@ def retain_chrome_readonly_diagnostics():
     except Refused as error:row['incompleteCode']=str(error) if str(error).startswith(('BOOT_PHASE_DEADLINE','OWN_COMMAND_TIMEOUT_')) else 'READONLY_DIAGNOSTICS_REFUSED'
     save()
 
+CHROME_TERMS_APPROVAL_FLAG='--approve-chrome-124-terms-without-account'
+CHROME_TERMS_FOOTER='By continuing, you agree to the Terms of Service. To help improve the app, Chrome sends usage and crash data to Google. Manage'
+
+def chrome_terms_target(xml,png,version_lines):
+    versions={line.removeprefix('versionName=') for line in version_lines if line.startswith('versionName=')}
+    if versions!={'124.0.6367.219'}:raise Refused('REVIEWED_CHROME_VERSION_REQUIRED_FOR_TERMS_ACTION')
+    if len(xml)>2*1024*1024 or b'<!DOCTYPE' in xml.upper() or b'<!ENTITY' in xml.upper():raise Refused('CHROME_TERMS_XML_INVALID')
+    tree=ET.fromstring(xml);package='com.android.chrome';prefix=package+':id/'
+    packages={e.get('package') for e in tree.iter() if e.get('package')}
+    if package not in packages or not packages.issubset({package,'android','com.android.systemui'}):raise Refused('CHROME_TERMS_FOREGROUND_REQUIRED')
+    if len(png)<24 or png[:8]!=b'\x89PNG\r\n\x1a\n' or png[12:16]!=b'IHDR':raise Refused('CHROME_TERMS_DIMENSIONS_REQUIRED')
+    width=int.from_bytes(png[16:20],'big');height=int.from_bytes(png[20:24],'big')
+    if not(0<width<=16384 and 0<height<=16384):raise Refused('CHROME_TERMS_DIMENSIONS_REQUIRED')
+    eligible={}
+    def walk(e,visible=True):
+        visible=visible and e.get('enabled')!='false' and e.get('visible-to-user')!='false' and e.get('displayed')!='false'
+        eligible[id(e)]=visible
+        for child in e:walk(child,visible)
+    walk(tree)
+    def one(suffix,text,klass,clickable):
+        nodes=[e for e in tree.iter() if e.get('resource-id')==prefix+suffix]
+        if len(nodes)!=1:raise Refused('UNIQUE_REVIEWED_CHROME_TERMS_NODE_REQUIRED')
+        e=nodes[0]
+        if not eligible[id(e)] or e.get('package')!=package or e.get('text')!=text or e.get('content-desc','')!='' or e.get('class')!=klass or e.get('enabled')!='true' or e.get('clickable')!=clickable:raise Refused('REVIEWED_CHROME_TERMS_SCREEN_MISMATCH')
+        match=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',e.get('bounds',''))
+        if not match:raise Refused('CHROME_TERMS_BOUNDS_REQUIRED')
+        bounds=list(map(int,match.groups()));x0,y0,x1,y1=bounds
+        if not(0<=x0<x1<=width and 0<=y0<y1<=height):raise Refused('CHROME_TERMS_BOUNDS_REQUIRED')
+        return e,bounds
+    one('title','Welcome to Chrome','android.widget.TextView','false')
+    one('subtitle','Sign in to browse easier across devices','android.widget.TextView','false')
+    one('signin_fre_footer',CHROME_TERMS_FOOTER,'android.widget.TextView','false')
+    one('signin_fre_continue_button','Add account to device','android.widget.Button','true')
+    target,bounds=one('signin_fre_dismiss_button','Use without an account','android.widget.Button','true')
+    clickables=[e for e in tree.iter() if e.get('clickable')=='true' and eligible[id(e)]]
+    if len(clickables)!=2 or {e.get('resource-id') for e in clickables}!={prefix+'signin_fre_continue_button',prefix+'signin_fre_dismiss_button'}:raise Refused('UNREVIEWED_CHROME_TERMS_CONTROLS_PRESENT')
+    reviewed_texts={'Welcome to Chrome','Sign in to browse easier across devices','Add account to device','Use without an account',CHROME_TERMS_FOOTER}
+    labels=[e.get('text') or e.get('content-desc') for e in tree.iter() if eligible[id(e)] and (e.get('text') or e.get('content-desc'))]
+    if len(labels)!=5 or set(labels)!=reviewed_texts:raise Refused('UNREVIEWED_CHROME_TERMS_TEXT_PRESENT')
+    x0,y0,x1,y1=bounds
+    return {'x':(x0+x1)//2,'y':(y0+y1)//2,'bounds':bounds,'screen':[width,height],'resourceId':target.get('resource-id'),'label':target.get('text')}
+
+def maybe_approved_chrome_terms_action(version_lines,argv):
+    if CHROME_TERMS_APPROVAL_FLAG not in argv:return False
+    if argv!=[CHROME_TERMS_APPROVAL_FLAG]:raise Refused('EXACT_SINGLE_TERMS_APPROVAL_FLAG_REQUIRED')
+    capture_start=time.monotonic();screen('chrome-before-approved-terms-action')
+    xml=(OUT/'chrome-before-approved-terms-action.xml').read_bytes();png=(OUT/'chrome-before-approved-terms-action.png').read_bytes()
+    target=chrome_terms_target(xml,png,version_lines)
+    age=time.monotonic()-capture_start
+    if not(0<=age<=10):raise Refused('CHROME_TERMS_SNAPSHOT_TOO_OLD')
+    STATE['chromeTermsAction']={'explicitOptInFlagProvided':True,'reviewedVersion':'124.0.6367.219','acceptsDisplayedTermsOfService':True,'displayedUsageAndCrashDataDisclosure':True,'createsOrSignsIntoAccount':False,'target':target,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'snapshotAgeUpperBoundSeconds':age,'attempts':1,'postScreenRequired':True}
+    STATE['UIInputCommands']=STATE.get('UIInputCommands',0)+1;save()
+    run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_approved_chrome_use_without_account',timeout=5)
+    STATE['termsAcceptedByScript']=None;STATE['termsAcceptanceActionDispatched']=True;STATE['termsAcceptanceOutcome']='UNVERIFIED_PENDING_POST_SCREEN_REVIEW';save()
+    screen('chrome-post-approved-terms-action',observation_deadline=min(time.monotonic()+30,START+CAP))
+    STATE['chromeTermsAction']['postXMLSHA256']=hashlib.sha256((OUT/'chrome-post-approved-terms-action.xml').read_bytes()).hexdigest()
+    STATE['chromeTermsAction']['postPNGSHA256']=hashlib.sha256((OUT/'chrome-post-approved-terms-action.png').read_bytes()).hexdigest()
+    STATE['status']='STOP_AFTER_APPROVED_CHROME_TERMS_ACTION_REQUIRES_REVIEW'
+    return True
+
 def listener_guard():
     data,_,_=run(['ss','-ltn'],'selected_listeners')
     selected=[]
@@ -307,6 +367,7 @@ def main():
         lines=[line.strip() for line in version.decode(errors='replace').splitlines() if re.match(r'\s*version(?:Name|Code)=',line)]
         (OUT/'chrome_version.log').write_text('\n'.join(lines)+'\n');STATE['androidChromeVersionLines']=lines
         if cut or not any(line.startswith('versionName=') for line in lines):raise Refused('ANDROID_CHROME_VERSION_UNVERIFIED')
+        if maybe_approved_chrome_terms_action(lines,sys.argv[1:]):return 0
         STATE['status']='STOP_CHROME_FIRST_SCREEN_REQUIRES_REVIEW_NO_CONTINUATION'
         return 0
     except Refused as e:STATE['status']='REFUSED_CAPABILITY';STATE['refusalCode']=str(e);return 2
