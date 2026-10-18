@@ -5,8 +5,10 @@ import hashlib,json,shutil,sys,time,xml.etree.ElementTree as ET
 from pathlib import Path
 import native_functional_input as ui
 import readonly_functional_bridge as bridge
+import installed_target_selector_v16_measurement as selection
 import functional_contracts as contract
 HERE=Path(__file__).resolve().parent
+INSTALLED_SELECTION_PINS={'installed_target_selector_v16_measurement.py': '7a0987ea22b49a0ccf0d7b610d856e1ebcd00251d6332754ca26ecd945b07c1a', 'read_installed_identity_v16.mjs': '4aa8ff0c57feb24bbec01735bd3f19542586f353e1455af64653d3b43096708a', 'readonly_functional_bridge.py': '098f061dfa5875687c726409f11fcb4a7287031c39aba8e0d9e704d62c50ad5b'}
 MODES={'url','eof','failure'}
 def sha(raw):return hashlib.sha256(raw).hexdigest()
 def installed_document_origin(state):
@@ -32,19 +34,35 @@ class Driver:
   (self.out/'acquisition.json').write_text(json.dumps({'schema':'v16-android-native-functional-acquisition-v1','mode':self.mode,'phaseOperationalLimitSeconds':self.phase_limit,'actions':self.actions,'snapshots':self.snapshots,'claim':self.claim,'failure':self.failure,'functionalPassClaimed':False,'audioMeasured':False,'physicalPhoneEquivalent':False},indent=2)+'\n')
  def observe(self,carrier=False,require_same_document=True):
   self.check();self.n+=1;extra=[];b=self.b
+  for name,digest in INSTALLED_SELECTION_PINS.items():
+   if sha((HERE/name).read_bytes())!=digest:raise b.Refused('EXACT_INSTALLED_MEASUREMENT_SELECTOR_REQUIRED')
   def adb(args):
    self.check();data,_,cut=b.run([b.ADB]+args,'functional-readonly-adb-'+str(self.n),timeout=5,limit=1024*1024,retain_stdout=False)
    if cut:raise b.Refused('FUNCTIONAL_ADB_TRUNCATED')
    return data
-  def evaluate(endpoint):
+  def evaluate(endpoint,seconds=12):
    self.check();node=shutil.which('node')
    if not node:raise b.Refused('EXISTING_NODE_REQUIRED')
-   data,_,cut=b.run([node,str(HERE/'read_functional_state.mjs'),endpoint],'functional-fixed-readonly-'+str(self.n),timeout=12,limit=32*1024*1024,retain_stdout=False)
+   data,_,cut=b.run([node,str(HERE/'read_functional_state.mjs'),endpoint],'functional-fixed-readonly-'+str(self.n),timeout=min(12,seconds),limit=32*1024*1024,retain_stdout=False)
    if cut:raise b.Refused('FUNCTIONAL_DOM_TRUNCATED')
    values=bridge.decode_json(data)
    if not isinstance(values,list)or len(values)!=13 or any(v is not None and not isinstance(v,str)for v in values[10:]):raise b.Refused('FIXED_FUNCTIONAL_DOM_SCHEMA')
    extra.append({'nativeReportText':values[10],'nativeFreezeStatus':values[11],'nativeRestoreStatus':values[12]});return json.dumps(values[:10]).encode()
-  target=self.out/('readonly-'+str(self.n));r=bridge.observe_owned_pwa(adb,bridge.local_http_get,evaluate,target,owned_vm_guard=True,require_carrier=carrier)
+  identity_count=[0]
+  def identity_evaluate(endpoint,seconds):
+   self.check();node=shutil.which('node')
+   if not node:raise b.Refused('EXISTING_NODE_REQUIRED')
+   identity_count[0]+=1
+   data,_,cut=b.run([node,str(HERE/'read_installed_identity_v16.mjs'),endpoint],'functional-target-identity-'+str(self.n)+'-'+str(identity_count[0]),timeout=min(10,seconds),limit=1024*1024,retain_stdout=False)
+   if cut:raise b.Refused('INSTALLED_MEASUREMENT_IDENTITY_TRUNCATED')
+   return data
+  def select_installed(version,targets,port,evidence):
+   def list_targets(seconds):
+    self.check();return bridge.decode_json(bridge.local_http_get(port,'/json/list',min(3,seconds)),1024*1024)
+   try:
+    return selection.select(version,targets,port,read_identity=identity_evaluate,read_full=evaluate,list_targets=list_targets,decode=bridge.decode_json,validate_target=lambda v,rows,p:bridge.browser_and_target(v,rows,p,False),validate_full=lambda value:bridge.validate_observation(value,carrier,False),evidence=evidence,allow_distinct_owned_urls=True,source_profile='functional')
+   except selection.Refused as error:raise bridge.Refused(str(error))
+  target=self.out/('readonly-'+str(self.n));r=bridge.observe_owned_pwa(adb,bridge.local_http_get,evaluate,target,owned_vm_guard=True,require_carrier=carrier,installed_selector=select_installed)
   self.check()
   if r['status']not in ['CURRENT_DOCUMENT_OBSERVATION_RETAINED_NO_CARRIER','ORIGINAL_READONLY_CARRIER_RETAINED_NOT_VALIDATED']or r['cleanupVerified']is not True or len(extra)!=1:raise b.Refused('ACTUAL_FUNCTIONAL_READONLY_REFUSED')
   o=r['observation']

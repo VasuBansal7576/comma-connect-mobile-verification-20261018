@@ -6,7 +6,7 @@ HERE=Path(__file__).resolve().parent
 def checked_source():
  manifest=json.loads((HERE/'functional-manifest.json').read_text())
  if manifest.get('schema')!='v16-owned-android-functional-input-set-v1':raise ValueError('FUNCTIONAL_MANIFEST_SCHEMA')
- expected={'boot.py','readonly_bridge_v16.py','read_dom_v16.mjs','derive_functional_boot.py','functional_acquire.py','functional_contracts.py','native_functional_input.py','readonly_functional_bridge.py','read_functional_state.mjs'}
+ expected={'boot.py','derive_functional_boot.py','functional_acquire.py','functional_contracts.py','installed_target_selector_v16.py','installed_target_selector_v16_measurement.py','native_functional_input.py','read_dom_v16.mjs','read_functional_state.mjs','read_installed_identity_v16.mjs','readonly_bridge_v16.py','readonly_functional_bridge.py','readonly_installed_bridge_v16.py'}
  if set(manifest.get('runtimeFiles',{}))!=expected:raise ValueError('CLOSED_RUNTIME_DEPENDENCIES_REQUIRED')
  for name,pin in manifest['runtimeFiles'].items():
   raw=(HERE/name).read_bytes()

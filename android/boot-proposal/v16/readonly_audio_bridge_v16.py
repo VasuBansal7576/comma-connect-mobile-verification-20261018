@@ -78,9 +78,10 @@ def validate_observation(value,require_carrier=True,allow_closed_device=False):
     if require_carrier and (not carrier or not packed or not frozen):raise Refused('ORIGINAL_PACK_NOT_AVAILABLE')
     return {'href':href,'timeOrigin':origin,'standaloneNavigator':nav,'standaloneDisplay':display,'entry':entry,'badge':badge,'carrier':carrier,'packStatus':packed,'exportStatus':frozen}
 
-def local_http_get(port,path):
+def local_http_get(port,path,timeout_seconds=3):
     if type(port) is not int or not 1024<=port<=65535 or path not in ['/json/version','/json/list']:raise Refused('EXACT_LOOPBACK_HTTP_REQUEST_REQUIRED')
-    connection=http.client.HTTPConnection('127.0.0.1',port,timeout=3)
+    if type(timeout_seconds)not in [int,float]or not 0<timeout_seconds<=3:raise Refused('BOUNDED_LOCAL_HTTP_TIMEOUT_REQUIRED')
+    connection=http.client.HTTPConnection('127.0.0.1',port,timeout=timeout_seconds)
     try:
         connection.request('GET',path,headers={'Host':'127.0.0.1:'+str(port)})
         response=connection.getresponse()
@@ -90,7 +91,7 @@ def local_http_get(port,path):
         return body
     finally:connection.close()
 
-def observe_owned_pwa(adb,http_get,evaluate,output,*,owned_vm_guard,require_carrier=True,allow_closed_device=False):
+def observe_owned_pwa(adb,http_get,evaluate,output,*,owned_vm_guard,require_carrier=True,allow_closed_device=False,installed_selector=None):
     """Adapters: adb(list)->bytes; http_get(port,path)->bytes; evaluate(endpoint)->bytes.
     evaluate MUST be the sealed fixed-expression read_dom.mjs, never arbitrary JS.
     Each adapter call <=5s except evaluate <=10s; no retries. Caller owns VM/serial guard.
@@ -121,12 +122,17 @@ def observe_owned_pwa(adb,http_get,evaluate,output,*,owned_vm_guard,require_carr
         bound();version=decode_json(http_get(port,'/json/version'),65536);targets=decode_json(http_get(port,'/json/list'),1024*1024)
         if isinstance(version,dict):receipt['chromeVersionObserved']={k:version[k] for k in ['Browser','Android-Package','Protocol-Version'] if isinstance(version.get(k),str) and len(version[k])<=128}
         if isinstance(targets,list):receipt['targetSummaryObserved']=[{'type':t.get('type'),'isExactOwnedURL':t.get('url')==URL} for t in targets[:128] if isinstance(t,dict)]
-        target=browser_and_target(version,targets,port,allow_closed_device)
-        receipt['targetId']=target['id'];bound();data=evaluate(target['webSocketDebuggerUrl']);bound();observation=validate_observation(decode_json(data),require_carrier,allow_closed_device)
-        # Re-query identity after the read; no attach/activate/focus/navigation/input commands.
-        again=browser_and_target(version,decode_json(http_get(port,'/json/list'),1024*1024),port,allow_closed_device)
-        bound()
-        if again['id']!=target['id']:raise Refused('DOCUMENT_TARGET_CHANGED')
+        if installed_selector is None:
+            target=browser_and_target(version,targets,port,allow_closed_device)
+            receipt['targetId']=target['id'];bound();data=evaluate(target['webSocketDebuggerUrl']);bound()
+            again=browser_and_target(version,decode_json(http_get(port,'/json/list'),1024*1024),port,allow_closed_device)
+            bound()
+            if again['id']!=target['id']:raise Refused('DOCUMENT_TARGET_CHANGED')
+        else:
+            receipt['installedTargetSelection']={}
+            target,data=installed_selector(version,targets,port,receipt['installedTargetSelection']);bound()
+            receipt['targetId']=target['id']
+        observation=validate_observation(decode_json(data),require_carrier,allow_closed_device)
         receipt.update(status='CURRENT_DOCUMENT_OBSERVATION_RETAINED_NO_CARRIER',observation={k:v for k,v in observation.items() if k!='carrier'})
         if require_carrier:
             raw=observation['carrier'].encode('utf-8');(output/'original-carrier.txt').write_bytes(raw)

@@ -4,8 +4,10 @@ from pathlib import Path
 import audio_route_gate as gate
 import native_audio_input as ui
 import readonly_audio_bridge_v16 as bridge
+import installed_target_selector_v16_measurement as selection
 import unpack_android_carrier as unpack
 HERE=Path(__file__).resolve().parent
+INSTALLED_SELECTION_PINS={'installed_target_selector_v16_measurement.py': '7a0987ea22b49a0ccf0d7b610d856e1ebcd00251d6332754ca26ecd945b07c1a', 'read_installed_identity_v16.mjs': '4aa8ff0c57feb24bbec01735bd3f19542586f353e1455af64653d3b43096708a', 'readonly_audio_bridge_v16.py': 'd39ffaf824428f49eb63fea8276240ea3174ff09bb005368eff619d5188f696f'}
 REPO=HERE.parents[2]
 PINS={'capture_monitor.c':'e7a2a0388df1a2f85272e0f2b03e84f8c537174c994ef766e3e8e826907a0509','routing.py':'9f1a25697b1c145dde14419da577b199c59712feadb191e6d671a75bbc482b59','validate_native.py':'5b2732b81c187de3976f3dabfbac1f3115c5f272c4ae039e40cc056523da2c5a'}
 def sha(data):return hashlib.sha256(data).hexdigest()
@@ -44,21 +46,37 @@ class Driver:
   if self.collector is not None and not self.capture_wait and self.collector.poll()is not None:raise self.b.Refused('COLLECTOR_ENDED_DURING_SOURCE_PHASE')
  def observe(self,carrier=False):
   self.check();self.n+=1;extra=[];b=self.b
+  for name,digest in INSTALLED_SELECTION_PINS.items():
+   if sha((HERE/name).read_bytes())!=digest:raise b.Refused('EXACT_INSTALLED_MEASUREMENT_SELECTOR_REQUIRED')
   def adb(args):
    self.check();data,_,cut=b.run([b.ADB]+args,'audio-readonly-adb-'+str(self.n),timeout=5,limit=1024*1024,retain_stdout=False)
    if cut:raise b.Refused('AUDIO_READONLY_ADB_TRUNCATED')
    return data
-  def evaluate(endpoint):
+  def evaluate(endpoint,seconds=12):
    self.check();node=shutil.which('node')
    if not node:raise b.Refused('EXISTING_NODE_REQUIRED')
-   data,_,cut=b.run([node,str(HERE/'read_audio_state_v16.mjs'),endpoint],'audio-fixed-readonly-'+str(self.n),timeout=12,limit=32*1024*1024,retain_stdout=False)
+   data,_,cut=b.run([node,str(HERE/'read_audio_state_v16.mjs'),endpoint],'audio-fixed-readonly-'+str(self.n),timeout=min(12,seconds),limit=32*1024*1024,retain_stdout=False)
    if cut:raise b.Refused('AUDIO_DOM_TRUNCATED')
    values=bridge.decode_json(data)
    if not isinstance(values,list)or len(values)!=14:raise b.Refused('FIXED_AUDIO_DOM_SCHEMA')
    no_product,close_count,status,quick=values[10:]
    if type(no_product)is not bool or type(close_count)is not int or close_count<0 or any(x is not None and not isinstance(x,str)for x in [status,quick]):raise b.Refused('ACTUAL_DOM_AUDIO_FIELDS_REQUIRED')
    extra.append({'productAbsent':no_product,'closeCount':close_count,'osStatus':status or'','quickStatus':quick or'','frozenStatus':values[9] or'','packedStatus':values[8] or''});return json.dumps(values[:10]).encode()
-  target=self.out/('readonly-'+str(self.n));result=bridge.observe_owned_pwa(adb,bridge.local_http_get,evaluate,target,owned_vm_guard=True,require_carrier=carrier,allow_closed_device=self.start_confirmed)
+  identity_count=[0]
+  def identity_evaluate(endpoint,seconds):
+   self.check();node=shutil.which('node')
+   if not node:raise b.Refused('EXISTING_NODE_REQUIRED')
+   identity_count[0]+=1
+   data,_,cut=b.run([node,str(HERE/'read_installed_identity_v16.mjs'),endpoint],'audio-target-identity-'+str(self.n)+'-'+str(identity_count[0]),timeout=min(10,seconds),limit=1024*1024,retain_stdout=False)
+   if cut:raise b.Refused('INSTALLED_MEASUREMENT_IDENTITY_TRUNCATED')
+   return data
+  def select_installed(version,targets,port,evidence):
+   def list_targets(seconds):
+    self.check();return bridge.decode_json(bridge.local_http_get(port,'/json/list',min(3,seconds)),1024*1024)
+   try:
+    return selection.select(version,targets,port,read_identity=identity_evaluate,read_full=evaluate,list_targets=list_targets,decode=bridge.decode_json,validate_target=lambda v,rows,p:bridge.browser_and_target(v,rows,p,self.start_confirmed),validate_full=lambda value:bridge.validate_observation(value,carrier,self.start_confirmed),evidence=evidence,allow_distinct_owned_urls=True,source_profile='compiled')
+   except selection.Refused as error:raise bridge.Refused(str(error))
+  target=self.out/('readonly-'+str(self.n));result=bridge.observe_owned_pwa(adb,bridge.local_http_get,evaluate,target,owned_vm_guard=True,require_carrier=carrier,allow_closed_device=self.start_confirmed,installed_selector=select_installed)
   self.check()
   if result['status']not in ['CURRENT_DOCUMENT_OBSERVATION_RETAINED_NO_CARRIER','ORIGINAL_READONLY_CARRIER_RETAINED_NOT_VALIDATED']or not result['cleanupVerified']or len(extra)!=1:raise b.Refused('ACTUAL_INSTALLED_READONLY_OBSERVATION_REFUSED')
   current=result['observation']['timeOrigin']

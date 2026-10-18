@@ -19,8 +19,8 @@
       "bytes": 3076
     },
     "functional_acquire.py": {
-      "sha256": "06140bd30ef36be781abbe36bb78f35aade2692b86aab234ae8d9249ec4d403a",
-      "bytes": 13943
+      "sha256": "08a85117b5d95251c4facad1d5aee15f5c651c7af3f5082b0184e8618c262077",
+      "bytes": 15710
     },
     "functional_contracts.py": {
       "sha256": "bde12c6c166e3eda7d2511a3516b46f5b8b331c2356e26c6e65301b66367a9c8",
@@ -31,8 +31,8 @@
       "bytes": 7787
     },
     "readonly_functional_bridge.py": {
-      "sha256": "3b3f9478ea015854806707381fdf2722b042e1b03f8999766e85d8fbcb591ce8",
-      "bytes": 11420
+      "sha256": "098f061dfa5875687c726409f11fcb4a7287031c39aba8e0d9e704d62c50ad5b",
+      "bytes": 11793
     },
     "read_functional_state.mjs": {
       "sha256": "a262a40e43b8eb061a0296c6168a65e12458bcd6b52dd3db1f118ddfb1a80913",
@@ -49,6 +49,10 @@
     "read_installed_identity_v16.mjs": {
       "sha256": "4aa8ff0c57feb24bbec01735bd3f19542586f353e1455af64653d3b43096708a",
       "bytes": 5132
+    },
+    "installed_target_selector_v16_measurement.py": {
+      "sha256": "7a0987ea22b49a0ccf0d7b610d856e1ebcd00251d6332754ca26ecd945b07c1a",
+      "bytes": 6223
     }
   },
   "derivedSourceSHA256": "5ba656903a9c5b0a80225aa3ec7ae485a77d1ec069f130dc0ab99330ed19b911",
