@@ -11,6 +11,10 @@ on:
         type: boolean
         default: false
         description: Requires human approval to accept exact Chrome124 welcome Terms with the displayed data-reporting disclosure
+      continue_to_owned_v15_lab:
+        type: boolean
+        default: false
+        description: Acknowledge reviewed nonbinding ad-privacy notice and navigate only the public V15 lab; capture and stop
 permissions:
   contents: read
 jobs:
@@ -42,9 +46,15 @@ jobs:
         if: inputs.owner_reviewed_remote_prerequisites
         env:
           CHROME_TERMS_APPROVED: ${{ inputs.approve_chrome_124_terms_without_account }}
+          OWNED_LAB_CONTINUATION: ${{ inputs.continue_to_owned_v15_lab }}
         run: |
-          if [ "$CHROME_TERMS_APPROVED" = true ]; then
+          if [ "$CHROME_TERMS_APPROVED" = true ] && [ "$OWNED_LAB_CONTINUATION" = true ]; then
+            python3 android/boot-proposal/boot.py --approve-chrome-124-terms-without-account --continue-owned-v15-lab-after-privacy-notice
+          elif [ "$CHROME_TERMS_APPROVED" = true ]; then
             python3 android/boot-proposal/boot.py --approve-chrome-124-terms-without-account
+          elif [ "$OWNED_LAB_CONTINUATION" = true ]; then
+            echo 'Owned lab continuation requires the explicitly approved welcome action first.'
+            exit 2
           else
             python3 android/boot-proposal/boot.py
           fi

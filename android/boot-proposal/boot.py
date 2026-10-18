@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import shlex
 import subprocess
 import sys
 import threading
@@ -268,7 +269,7 @@ def chrome_terms_target(xml,png,version_lines):
 
 def maybe_approved_chrome_terms_action(version_lines,argv):
     if CHROME_TERMS_APPROVAL_FLAG not in argv:return False
-    if argv!=[CHROME_TERMS_APPROVAL_FLAG]:raise Refused('EXACT_SINGLE_TERMS_APPROVAL_FLAG_REQUIRED')
+    if argv not in [[CHROME_TERMS_APPROVAL_FLAG],[CHROME_TERMS_APPROVAL_FLAG,OWNED_LAB_CONTINUATION_FLAG]]:raise Refused('EXACT_REVIEWED_CONTINUATION_FLAGS_REQUIRED')
     capture_start=time.monotonic();screen('chrome-before-approved-terms-action')
     xml=(OUT/'chrome-before-approved-terms-action.xml').read_bytes();png=(OUT/'chrome-before-approved-terms-action.png').read_bytes()
     target=chrome_terms_target(xml,png,version_lines)
@@ -279,7 +280,9 @@ def maybe_approved_chrome_terms_action(version_lines,argv):
     run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_approved_chrome_use_without_account',timeout=5)
     STATE['termsAcceptedByScript']=None;STATE['termsAcceptanceActionDispatched']=True;STATE['termsAcceptanceOutcome']='UNVERIFIED_PENDING_POST_SCREEN_REVIEW';save()
     observe_post_terms_readiness()
-    STATE['status']='STOP_AFTER_APPROVED_CHROME_TERMS_ACTION_REQUIRES_REVIEW'
+    if OWNED_LAB_CONTINUATION_FLAG in argv:
+        continue_owned_lab_after_reviewed_privacy_notice(version_lines)
+    else:STATE['status']='STOP_AFTER_APPROVED_CHROME_TERMS_ACTION_REQUIRES_REVIEW'
     return True
 
 def post_terms_is_new_meaningful_ui(xml):
@@ -309,6 +312,87 @@ def observe_post_terms_readiness():
         if row['newMeaningfulChromeUI']:
             STATE['postTermsObservationOutcome']='FRESH_NEW_CHROME_UI_REQUIRES_REVIEW';return
     STATE['postTermsObservationOutcome']='UNKNOWN_AFTER_BOUNDED_FRESH_POST_TERMS_OBSERVATION'
+
+OWNED_LAB_CONTINUATION_FLAG='--continue-owned-v15-lab-after-privacy-notice'
+OWNED_LAB_URL='https://comma-connect-fix-lab-20261016.zippy17.chatgpt.site/nqa?candidate=v15&experiment=nqa'
+REVIEWED_PRIVACY_TEXTS=['Enhanced ad privacy in Chrome', 'We’re launching new privacy features that give you more choice over the ads you see.', 'Chrome notes topics of interest based on your recent browsing history. Also, sites you visit can determine what you like. Later, sites can ask for this information to show you personalized ads. You can choose which topics and sites are used to show you ads.', 'To measure the performance of an ad, limited types of data are shared between sites, such as whether you made a purchase after visiting a site.', 'More about ads in Chrome', 'You can make changes in Chrome settings']
+
+def privacy_notice_target(xml,png,version_lines):
+    versions={line.removeprefix('versionName=') for line in version_lines if line.startswith('versionName=')}
+    if versions!={'124.0.6367.219'}:raise Refused('REVIEWED_CHROME_VERSION_REQUIRED_FOR_PRIVACY_NOTICE')
+    if len(xml)>2*1024*1024 or b'<!DOCTYPE' in xml.upper() or b'<!ENTITY' in xml.upper():raise Refused('PRIVACY_NOTICE_XML_INVALID')
+    tree=ET.fromstring(xml);package='com.android.chrome';prefix=package+':id/'
+    packages={e.get('package') for e in tree.iter() if e.get('package')}
+    if package not in packages or not packages.issubset({package,'android','com.android.systemui'}):raise Refused('PRIVACY_NOTICE_FOREGROUND_REQUIRED')
+    if len(png)<24 or png[:8]!=b'\x89PNG\r\n\x1a\n' or png[12:16]!=b'IHDR':raise Refused('PRIVACY_NOTICE_SCREEN_REQUIRED')
+    width=int.from_bytes(png[16:20],'big');height=int.from_bytes(png[20:24],'big')
+    if not(0<width<=16384 and 0<height<=16384):raise Refused('PRIVACY_NOTICE_SCREEN_REQUIRED')
+    eligible={}
+    def walk(e,visible=True):
+        visible=visible and e.get('enabled')!='false' and e.get('visible-to-user')!='false' and e.get('displayed')!='false';eligible[id(e)]=visible
+        for child in e:walk(child,visible)
+    walk(tree)
+    def rect(e,klass,clickable):
+        if not eligible[id(e)] or e.get('package')!=package or e.get('class')!=klass or e.get('enabled')!='true' or e.get('clickable')!=clickable or e.get('content-desc','')!='':raise Refused('PRIVACY_NOTICE_NODE_MISMATCH')
+        match=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',e.get('bounds',''))
+        if not match:raise Refused('PRIVACY_NOTICE_BOUNDS_REQUIRED')
+        r=list(map(int,match.groups()));x0,y0,x1,y1=r
+        if not(0<=x0<x1<=width and 0<=y0<y1<=height):raise Refused('PRIVACY_NOTICE_BOUNDS_REQUIRED')
+        return r
+    for text in REVIEWED_PRIVACY_TEXTS:
+        nodes=[e for e in tree.iter() if e.get('text')==text]
+        if len(nodes)!=1:raise Refused('EXACT_PRIVACY_DISCLOSURE_REQUIRED')
+        rect(nodes[0],'android.widget.TextView','false')
+    nodes_by_id={}
+    for suffix,text,klass in [('settings_button','Settings','android.widget.Button'),('ack_button','Got it','android.widget.Button'),('dropdown_element','','android.widget.LinearLayout')]:
+        nodes=[e for e in tree.iter() if e.get('resource-id')==prefix+suffix]
+        if len(nodes)!=1 or nodes[0].get('text','')!=text:raise Refused('UNIQUE_REVIEWED_PRIVACY_CONTROL_REQUIRED')
+        nodes_by_id[suffix]=(nodes[0],rect(nodes[0],klass,'true'))
+    labels=[e.get('text') or e.get('content-desc') for e in tree.iter() if e.get('package')==package and eligible[id(e)] and (e.get('text') or e.get('content-desc'))]
+    if len(labels)!=8 or set(labels)!=set(REVIEWED_PRIVACY_TEXTS+['Settings','Got it']):raise Refused('UNREVIEWED_PRIVACY_NOTICE_TEXT_PRESENT')
+    clicks=[e for e in tree.iter() if e.get('package')==package and eligible[id(e)] and e.get('clickable')=='true']
+    if len(clicks)!=3 or {e.get('resource-id') for e in clicks}!={prefix+k for k in nodes_by_id}:raise Refused('UNREVIEWED_PRIVACY_NOTICE_CONTROLS_PRESENT')
+    _,bounds=nodes_by_id['ack_button'];x0,y0,x1,y1=bounds;x=(x0+x1)//2;y=(y0+y1)//2
+    if any(a<=x<b and c<=y<d for _,(a,c,b,d) in [v for k,v in nodes_by_id.items() if k!='ack_button']):raise Refused('PRIVACY_ACK_TARGET_OVERLAPPED')
+    return {'x':x,'y':y,'bounds':bounds,'screen':[width,height],'resourceId':prefix+'ack_button','label':'Got it'}
+
+def owned_lab_view_command():
+    # Android's documented unqualified package argument restricts this VIEW intent.
+    return shlex.join(['am','start','-W','-a','android.intent.action.VIEW','-d',OWNED_LAB_URL,'com.android.chrome'])
+
+def observe_owned_lab_native_ui():
+    start=time.monotonic();deadline=min(start+70,START+CAP);rows=[];STATE['ownedLabNativeObservations']=rows
+    transient={'UI_DUMP_REPORTED_ERROR','UI_DUMP_SUCCESS_MARKER_REQUIRED','UI_XML_INVALID','OWN_COMMAND_FAILED_ui_dump','OWN_COMMAND_FAILED_ui_xml','OWN_COMMAND_TIMEOUT_ui_dump','OWN_COMMAND_TIMEOUT_ui_xml','OWN_COMMAND_TIMEOUT_screen_png','CHROME_SCREEN_OBSERVATION_DEADLINE'}
+    for attempt in range(1,4):
+        delay=start+(attempt-1)*20-time.monotonic()
+        if delay>0:time.sleep(min(delay,max(0,deadline-time.monotonic())))
+        if time.monotonic()>=deadline:break
+        label='owned-v15-native-observation-'+str(attempt);row={'attempt':attempt,'label':label};rows.append(row)
+        try:screen(label,observation_deadline=deadline)
+        except Refused as error:
+            if str(error) not in transient:raise
+            row['status']='FRESH_XML_UNAVAILABLE';row['code']=str(error);save();continue
+        data=(OUT/(label+'.xml')).read_bytes();tree=ET.fromstring(data)
+        row['xmlFreshnessVerified']=True;row['xmlSHA256']=hashlib.sha256(data).hexdigest();row['pngSHA256']=hashlib.sha256((OUT/(label+'.png')).read_bytes()).hexdigest()
+        row['packages']=sorted({e.get('package') for e in tree.iter() if e.get('package')})
+        row['ownedHostVisibleInText']=any('comma-connect-fix-lab-20261016.zippy17.chatgpt.site' in (e.get('text','')+' '+e.get('content-desc','')) for e in tree.iter())
+        row['scope']='Native UI observation only; URL/page readiness, helper pins and installed status require separate review.';save()
+    STATE['ownedLabNativeObservationOutcome']='STOP_NATIVE_LAB_OBSERVATIONS_REQUIRE_REVIEW_NO_INSTALL_OR_AUDIO_VERDICT'
+
+def continue_owned_lab_after_reviewed_privacy_notice(version_lines):
+    # Optional owned-test continuation only; no Settings/dropdown/account/legal action.
+    view_command=owned_lab_view_command()
+    capture_start=time.monotonic();screen('chrome-before-reviewed-privacy-ack')
+    xml=(OUT/'chrome-before-reviewed-privacy-ack.xml').read_bytes();png=(OUT/'chrome-before-reviewed-privacy-ack.png').read_bytes()
+    target=privacy_notice_target(xml,png,version_lines);age=time.monotonic()-capture_start
+    if not(0<=age<=10):raise Refused('PRIVACY_NOTICE_SNAPSHOT_TOO_OLD')
+    STATE['privacyNoticeAcknowledgement']={'explicitOwnedContinuationFlag':True,'attempts':1,'target':target,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'snapshotAgeUpperBoundSeconds':age,'actionScope':'Acknowledge exact reviewed notice; no Settings/dropdown/account interaction. No further agreement accepted.'}
+    STATE['UIInputCommands']=STATE.get('UIInputCommands',0)+1;save()
+    run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_reviewed_privacy_got_it',timeout=5)
+    STATE['privacyNoticeAcknowledgement']['tapCommandCompleted']=True;STATE['ownedLabNavigation']={'action':'android.intent.action.VIEW','package':'com.android.chrome','url':OWNED_LAB_URL,'attempts':1};save()
+    run([ADB,'-s',SERIAL,'shell',view_command],'navigate_owned_v15_with_action_view',timeout=15)
+    STATE['ownedLabNavigation']['commandCompleted']=True;observe_owned_lab_native_ui()
+    STATE['status']='STOP_AFTER_OWNED_LAB_NATIVE_OBSERVATIONS_REQUIRES_REVIEW'
 
 def listener_guard():
     data,_,_=run(['ss','-ltn'],'selected_listeners')
