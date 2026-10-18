@@ -92,6 +92,7 @@ jobs:
           fi
           if [ "$CONFIRM_OWNED_INSTALL" = true ]; then
             python3 android/boot-proposal/v16/boot.py --approve-chrome-124-terms-without-account --continue-owned-v16-lab-after-privacy-notice --observe-owned-v16-chrome-menu --observe-owned-v16-add-home-dialog --observe-owned-v16-install-option-dialog --confirm-owned-v16-install-and-observe
+            python3 -c 'import json; from pathlib import Path; r=json.loads(Path("evidence/android-boot/receipt.json").read_text()); assert r.get("installedPWAStandaloneObserved") is True and r.get("readonlyInstalledObservation",{}).get("cleanupVerified") is True, "Final requested standalone observation is incomplete"'
           elif [ "$OBSERVE_INSTALL_OPTION" = true ]; then
             python3 android/boot-proposal/v16/boot.py --approve-chrome-124-terms-without-account --continue-owned-v16-lab-after-privacy-notice --observe-owned-v16-chrome-menu --observe-owned-v16-add-home-dialog --observe-owned-v16-install-option-dialog
           elif [ "$OBSERVE_ADD_HOME" = true ]; then

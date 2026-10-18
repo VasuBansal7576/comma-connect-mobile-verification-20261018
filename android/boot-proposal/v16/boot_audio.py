@@ -930,18 +930,39 @@ def confirm_owned_install_and_observe(version_lines,option_action):
         if delay>0:time.sleep(min(delay,max(0,deadline-time.monotonic())))
         if time.monotonic()>=deadline:break
         label='owned-v16-after-final-install-'+str(attempt);row={'attempt':attempt,'label':label};rows.append(row)
-        try:
-            screen(label,observation_deadline=deadline)
-            current_xml=(OUT/(label+'.xml')).read_bytes();current_png=(OUT/(label+'.png')).read_bytes();row.update(xmlSHA256=hashlib.sha256(current_xml).hexdigest(),pngSHA256=hashlib.sha256(current_png).hexdigest());save()
-            known_owned_chrome_without_dialog(current_xml,current_png,version_lines)
+        try:screen(label,observation_deadline=deadline)
         except Refused as error:row['readinessCode']=str(error);save();continue
+        current_xml=(OUT/(label+'.xml')).read_bytes();current_png=(OUT/(label+'.png')).read_bytes();row.update(xmlSHA256=hashlib.sha256(current_xml).hexdigest(),pngSHA256=hashlib.sha256(current_png).hexdigest());save()
+        try:
+            if observed_placement_marker(current_xml):
+                nexus_placement_target(current_xml,current_png,version_lines);kind='OBSERVED_EXACT_NATIVE_PLACEMENT'
+            else:
+                known_owned_chrome_without_dialog(current_xml,current_png,version_lines);row['knownChromeObserved']=True;save()
+                # Chrome reappearing is not installation completion; retain the existing0/20/40s readonly slots.
+                if attempt<3 or time.monotonic()-start<40:continue
+                kind='FINITE_CHROME_OBSERVATION_NO_COMPLETION_VERDICT'
+        except (Refused,ET.ParseError)as error:
+            row['readinessCode']=str(error)if isinstance(error,Refused)else'POST_INSTALL_XML_INVALID';STATE['status']='STOP_UNKNOWN_POST_INSTALL_NATIVE_CONTEXT_NO_HOME_INPUT';save();return
+        row['readinessKind']=kind;STATE['ownedPostInstallReadiness']={'kind':kind,'label':label,'xmlSHA256':row['xmlSHA256'],'pngSHA256':row['pngSHA256'],'observationAttempt':attempt,'elapsedSinceFinalDispatchSeconds':time.monotonic()-start,'finalInstallSnapshotLabel':STATE['ownedFinalInstallInput']['inputSnapshotLabel'],'completedInputOrdinal':7,'scope':'Exact placement or finite readonly Chrome observation only; no install/placement completion is inferred.'};save()
         launch_observed_owned_pwa(version_lines);return
     STATE['status']='STOP_POST_INSTALL_UNKNOWN_NO_HOME_INPUT';save()
 
+def verified_post_install_readiness(version_lines):
+    proof=STATE.get('ownedPostInstallReadiness',{});kind=proof.get('kind');label=proof.get('label','');attempt=proof.get('observationAttempt');elapsed=proof.get('elapsedSinceFinalDispatchSeconds')
+    if proof.get('finalInstallSnapshotLabel')!=STATE.get('ownedFinalInstallInput',{}).get('inputSnapshotLabel')or proof.get('completedInputOrdinal')!=7 or type(attempt)is not int or attempt not in [1,2,3]or label!='owned-v16-after-final-install-'+str(attempt):raise Refused('CURRENT_POST_INSTALL_READINESS_REQUIRED')
+    xml=(OUT/(label+'.xml')).read_bytes();png=(OUT/(label+'.png')).read_bytes()
+    if hashlib.sha256(xml).hexdigest()!=proof.get('xmlSHA256')or hashlib.sha256(png).hexdigest()!=proof.get('pngSHA256'):raise Refused('POST_INSTALL_READINESS_PIN_MISMATCH')
+    if kind=='OBSERVED_EXACT_NATIVE_PLACEMENT':nexus_placement_target(xml,png,version_lines);return kind
+    if kind=='FINITE_CHROME_OBSERVATION_NO_COMPLETION_VERDICT':
+        if attempt!=3 or type(elapsed)not in[int,float]or not 40<=elapsed<=70:raise Refused('FINITE_POST_INSTALL_CHROME_WINDOW_REQUIRED')
+        known_owned_chrome_without_dialog(xml,png,version_lines);return kind
+    raise Refused('UNKNOWN_POST_INSTALL_READINESS_NO_HOME_INPUT')
+
 def launch_observed_owned_pwa(version_lines):
     if STATE.get('UIInputCommands')!=7 or not STATE.get('ownedFinalInstallInput',{}).get('tapCommandCompleted'):raise Refused('CURRENT_OWN_FINAL_INSTALL_REQUIRED')
-    verified_final_install_context(version_lines)
+    verified_final_install_context(version_lines);readiness_kind=verified_post_install_readiness(version_lines)
     fresh,xml,png=retained_fresh_input('owned-v16-before-home-after-install')
+    if readiness_kind=='OBSERVED_EXACT_NATIVE_PLACEMENT'and not observed_placement_marker(xml):raise Refused('OBSERVED_PLACEMENT_DISAPPEARED_WITHOUT_OWN_ACTION_NO_HOME')
     if observed_placement_marker(xml):
         target=nexus_placement_target(xml,png,version_lines);age=input_age(fresh)
         placement={'inputSnapshotLabel':fresh['label'],'snapshotAgeUpperBoundSeconds':age,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'target':target,'attempts':1,'inputOrdinalBefore':7,'inputOrdinal':8,'tapCommandCompleted':False,'finalInstallSnapshotLabel':STATE['ownedFinalInstallInput']['inputSnapshotLabel']};STATE['ownedPWAPlacementInput']=placement;STATE['UIInputCommands']+=1;save();input_age(fresh)

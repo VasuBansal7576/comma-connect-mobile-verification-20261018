@@ -88,6 +88,7 @@ jobs:
             if [ "$required" != true ]; then echo 'All separately approved installation prerequisites are required.'; exit 2; fi
           done
           python3 android/boot-proposal/v16/boot_audio.py --explicit-v16-audio --approve-chrome-124-terms-without-account --continue-owned-v16-lab-after-privacy-notice --observe-owned-v16-chrome-menu --observe-owned-v16-add-home-dialog --observe-owned-v16-install-option-dialog --confirm-owned-v16-install-and-observe
+          python3 -c 'import json; from pathlib import Path; r=json.loads(Path("evidence/android-boot/receipt.json").read_text()); assert r.get("installedPWAStandaloneObserved") is True and r.get("audioRawAndCarrierAcquired") is True, "Actual standalone source audio and original carrier are incomplete"'
       - name: Always clean bound owned processes and restore KVM ACL
         if: always() && inputs.owner_reviewed_remote_prerequisites && steps.boot.outcome != 'skipped'
         run: |
