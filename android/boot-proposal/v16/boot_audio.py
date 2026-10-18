@@ -297,8 +297,9 @@ def screen(label, observation_deadline=None):
     if xml_failure:raise xml_failure
     return {e.get('package') for e in tree.iter() if e.get('package')}
 
-def fresh_input_snapshot(label):
+def fresh_input_snapshot(label,require_chrome_icon=False):
     if not re.fullmatch(r'[a-z0-9-]+',label):raise Refused('OWN_INPUT_SNAPSHOT_LABEL_REQUIRED')
+    if require_chrome_icon and label!='android-pre-chrome-launch':raise Refused('EXACT_INITIAL_CHROME_READINESS_SCOPE_REQUIRED')
     helper_start=time.monotonic();deadline=min(helper_start+30,START+CAP)
     row={'phase':label,'deadlineBootSeconds':deadline-START,'attempts':[]};STATE.setdefault('inputSnapshotReadiness',[]).append(row);save()
     transient={'UI_DUMP_REPORTED_ERROR','UI_DUMP_SUCCESS_MARKER_REQUIRED','UI_XML_INVALID','OWN_COMMAND_FAILED_ui_dump','OWN_COMMAND_FAILED_ui_xml','OWN_COMMAND_TIMEOUT_ui_dump','OWN_COMMAND_TIMEOUT_ui_xml','OWN_COMMAND_TIMEOUT_screen_png','CHROME_SCREEN_OBSERVATION_DEADLINE'}
@@ -317,6 +318,18 @@ def fresh_input_snapshot(label):
         item['captureCompleteBootSeconds']=complete-START;item['ageAtCompletionSeconds']=complete-capture_start
         if complete-capture_start>10:
             item['status']='FRESH_BUT_AGED_OUT_NO_INPUT';save();continue
+        if require_chrome_icon:
+            xml=(OUT/(actual_label+'.xml')).read_bytes();png=(OUT/(actual_label+'.png')).read_bytes()
+            try:launcher_chrome_target(xml,png)
+            except Refused as error:
+                if str(error)!='UNIQUE_CHROME_ICON_REQUIRED':raise
+                tree=observed_launcher_foreground(xml)
+                if any(e.get('text')=='Chrome'or e.get('content-desc')=='Chrome'for e in tree.iter()):raise
+                item.update(status='CHROME_ICON_ABSENT_READONLY_RETRY',code=str(error));save();continue
+            validated=time.monotonic()
+            if validated<complete or validated>=deadline:raise Refused('INPUT_SNAPSHOT_READINESS_DEADLINE')
+            if validated-capture_start>10:item['status']='FRESH_BUT_AGED_OUT_NO_INPUT';save();continue
+            item['nativeChromeIconValidatedBootSeconds']=validated-START
         item['status']='FRESH_SNAPSHOT_RETAINED';row['successfulLabel']=actual_label;save()
         return {'label':actual_label,'captureStartMonotonic':capture_start,'captureCompleteMonotonic':complete,'packages':packages}
     row['status']='EXHAUSTED_NO_INPUT_PERMITTED';save();raise Refused('INPUT_SNAPSHOT_READINESS_EXHAUSTED')
@@ -373,7 +386,7 @@ def launcher_chrome_target(xml,png):
     return candidates[0]
 
 def launch_chrome_from_fresh_icon():
-    fresh=fresh_input_snapshot('android-pre-chrome-launch');capture_start=fresh['captureStartMonotonic']
+    fresh=fresh_input_snapshot('android-pre-chrome-launch',require_chrome_icon=True);capture_start=fresh['captureStartMonotonic']
     xml=(OUT/(fresh['label']+'.xml')).read_bytes();png=(OUT/(fresh['label']+'.png')).read_bytes()
     target=launcher_chrome_target(xml,png)
     age=time.monotonic()-capture_start
