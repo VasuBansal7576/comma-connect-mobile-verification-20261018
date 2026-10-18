@@ -19,6 +19,9 @@
 #define MONITOR "ci_silent.monitor"
 _Static_assert(sizeof(float)==4,"32-bit float required");
 static pa_mainloop *loop; static pa_context *context; static pa_stream *stream;
+static pa_operation *timing_operation;
+static double timing_request_at,last_timing_request;
+static uint64_t timing_requests,timing_replies;
 static FILE *pcm,*events; static uint64_t frames,sequence,event_sequence,holes;
 static int failed,ready,stopping,data_ready,index_basis_set; static int64_t index_basis; static double began,ready_at,stop_at;
 static uint32_t source_output_index=PA_INVALID_INDEX,monitor_index=PA_INVALID_INDEX; static unsigned duration;
@@ -29,6 +32,26 @@ static void event(const char *kind,int value){
     if(fprintf(events,"{\"eventSequence\":%"PRIu64",\"kind\":\"%s\",\"hostMonotonicSeconds\":%.9f,\"fileFrameOffset\":%"PRIu64",\"value\":%d}\n",event_sequence++,kind,mono(),frames,value)<0)failed=1;
 }
 static void refuse(const char *kind,int value){if(!failed)event(kind,value);failed=1;}
+/* Only read-only GET_RECORD_LATENCY metadata queries; never audio/source setters.
+ * One explicit operation is owned here; Pulse's existing auto refresh stays enabled. */
+static void timing_reply(pa_stream*s,int success,void*u){
+    (void)u;pa_operation*completed=timing_operation;timing_operation=NULL;
+    if(!completed){refuse("pulse-unmatched-timing-reply-error",1);return;}
+    pa_operation_unref(completed);timing_replies++;
+    const pa_timing_info*ti=pa_stream_get_timing_info(s);
+    if(fprintf(events,"{\"eventSequence\":%"PRIu64",\"kind\":\"timing-refresh-reply\",\"hostMonotonicSeconds\":%.9f,\"fileFrameOffset\":%"PRIu64",\"value\":%d,\"requestOrdinal\":%"PRIu64",\"timingAvailable\":%s",event_sequence++,mono(),frames,success,timing_requests,ti?"true":"false")<0)failed=1;
+    if(ti&&fprintf(events,",\"timingSystemSeconds\":%lld,\"timingSystemUsec\":%ld,\"readIndexBytes\":%"PRId64",\"readIndexCorrupt\":%d,\"writeIndexCorrupt\":%d",(long long)ti->timestamp.tv_sec,(long)ti->timestamp.tv_usec,ti->read_index,ti->read_index_corrupt,ti->write_index_corrupt)<0)failed=1;
+    if(fputs("}\n",events)==EOF)failed=1;
+    if(!success||!ti||ti->read_index_corrupt||ti->write_index_corrupt)refuse("pulse-timing-refresh-error",success);
+}
+static void refresh_timing(double now){
+    if(!ready||stopping||failed)return;
+    if(timing_operation){if(now-timing_request_at>=2.0)refuse("pulse-timing-refresh-deadline-error",1);return;}
+    if(now-last_timing_request<0.5)return;
+    last_timing_request=timing_request_at=now;timing_requests++;event("timing-refresh-request",(int)timing_requests);
+    timing_operation=pa_stream_update_timing_info(stream,timing_reply,NULL);
+    if(!timing_operation)refuse("pulse-timing-refresh-start-error",1);
+}
 static void overflow(pa_stream*s,void*u){(void)s;(void)u;refuse("pulse-overflow",1);}
 static void moved(pa_stream*s,void*u){(void)s;(void)u;refuse("pulse-device-moved",1);}
 static void suspended(pa_stream*s,void*u){(void)u;int x=pa_stream_is_suspended(s);event("pulse-suspended-state",x);if(x!=0)refuse("pulse-suspended-or-unknown",x);}
@@ -41,7 +64,7 @@ static void stream_state(pa_stream*s,void*u){
         if(pa_stream_is_suspended(s)!=0||pa_stream_is_corked(s)!=0){refuse("pulse-initial-suspended-or-corked",1);return;}
         source_output_index=pa_stream_get_index(s);monitor_index=pa_stream_get_device_index(s);
         if(source_output_index==PA_INVALID_INDEX||monitor_index==PA_INVALID_INDEX){refuse("pulse-missing-original-device-index",1);return;}
-        if(ready){refuse("pulse-duplicate-ready",1);return;}ready=1;ready_at=mono();event("capture-ready",0);puts("CAPTURE_READY");fflush(stdout);
+        if(ready){refuse("pulse-duplicate-ready",1);return;}ready=1;ready_at=mono();last_timing_request=ready_at-0.5;event("capture-ready",0);puts("CAPTURE_READY");fflush(stdout);
     }
 }
 static void receive(pa_stream*s,size_t hint,void*u){
@@ -105,14 +128,16 @@ int main(int argc,char**argv){
     if(pa_context_connect(context,getenv("PULSE_SERVER"),PA_CONTEXT_NOAUTOSPAWN,NULL)<0){refuse("pulse-private-context-connect-error",1);goto done;}
     while(!failed){
         double now=mono();if(!ready&&now-began>8){refuse("pulse-readiness-deadline",1);break;}if(ready&&now-ready_at>=duration)break;
+        refresh_timing(now);if(failed)break;
         int ret=0;if(pa_mainloop_iterate(loop,0,&ret)<0){refuse("pulse-mainloop-error",ret);break;}
         struct timespec delay={0,1000000};nanosleep(&delay,NULL);
     }
  done:
     stop_at=mono();stopping=1;alarm(5);event("capture-stop",failed);
+    if(timing_operation){pa_operation_cancel(timing_operation);pa_operation_unref(timing_operation);timing_operation=NULL;event("timing-refresh-cancel-at-stop",0);}
     int disconnected=1;if(stream){if(pa_stream_disconnect(stream)<0)disconnected=0;pa_stream_unref(stream);}if(context){pa_context_disconnect(context);pa_context_unref(context);}if(loop)pa_mainloop_free(loop);
     int file_ok=fflush(pcm)==0;if(fclose(pcm))file_ok=0;int journal_ok=fflush(events)==0;if(fclose(events))journal_ok=0;
     FILE*out=fopen(argv[4],"wx");if(!out)return 2;
     int ok=!failed&&ready&&data_ready&&frames>0&&holes==0&&file_ok&&journal_ok&&disconnected;
-    fprintf(out,"{\"schema\":\"native-private-pulse-monitor-capture-v1\",\"libraryVersion\":\"%s\",\"sampleRate\":48000,\"channels\":2,\"sampleFormat\":\"float32-le-interleaved\",\"frames\":%"PRIu64",\"fragments\":%"PRIu64",\"explicitHoleBytes\":%"PRIu64",\"requestedCaptureSeconds\":%u,\"capturePID\":%ld,\"pulseSourceOutputIndex\":%u,\"pulseMonitorIndex\":%u,\"dataReadinessObserved\":%s,\"captureElapsedSeconds\":%.9f,\"processElapsedSeconds\":%.9f,\"independentProcessDeadlineSeconds\":%u,\"cleanupDeadlineSeconds\":5,\"streamDisconnected\":%s,\"pcmFileClosed\":%s,\"journalFileClosed\":%s,\"nativeCaptureComplete\":%s,\"independentPerPacketPTSProvided\":false,\"microphoneRequested\":false,\"sourceContextOrNonceInvented\":false,\"functionalPWAQualificationClaimed\":false}\n",library_version,frames,sequence,holes,duration,(long)getpid(),source_output_index,monitor_index,data_ready?"true":"false",ready?stop_at-ready_at:0,mono()-began,duration==150u?170u:30u,disconnected?"true":"false",file_ok?"true":"false",journal_ok?"true":"false",ok?"true":"false");if(fclose(out))ok=0;alarm(0);return ok?0:2;
+    fprintf(out,"{\"schema\":\"native-private-pulse-monitor-capture-v1\",\"libraryVersion\":\"%s\",\"sampleRate\":48000,\"channels\":2,\"sampleFormat\":\"float32-le-interleaved\",\"frames\":%"PRIu64",\"fragments\":%"PRIu64",\"explicitHoleBytes\":%"PRIu64",\"requestedCaptureSeconds\":%u,\"capturePID\":%ld,\"pulseSourceOutputIndex\":%u,\"pulseMonitorIndex\":%u,\"dataReadinessObserved\":%s,\"captureElapsedSeconds\":%.9f,\"processElapsedSeconds\":%.9f,\"independentProcessDeadlineSeconds\":%u,\"cleanupDeadlineSeconds\":5,\"streamDisconnected\":%s,\"pcmFileClosed\":%s,\"journalFileClosed\":%s,\"nativeCaptureComplete\":%s,\"explicitTimingRefreshIntervalMilliseconds\":500,\"explicitTimingRefreshDeadlineMilliseconds\":2000,\"explicitTimingRefreshRequests\":%"PRIu64",\"explicitTimingRefreshReplies\":%"PRIu64",\"independentPerPacketPTSProvided\":false,\"microphoneRequested\":false,\"sourceContextOrNonceInvented\":false,\"functionalPWAQualificationClaimed\":false}\n",library_version,frames,sequence,holes,duration,(long)getpid(),source_output_index,monitor_index,data_ready?"true":"false",ready?stop_at-ready_at:0,mono()-began,duration==150u?170u:30u,disconnected?"true":"false",file_ok?"true":"false",journal_ok?"true":"false",ok?"true":"false",timing_requests,timing_replies);if(fclose(out))ok=0;alarm(0);return ok?0:2;
 }

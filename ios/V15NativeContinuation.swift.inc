@@ -35,7 +35,7 @@ extension V15InstalledUITests {
     }
     private func nfMenu() throws {
         nfOpenMain()
-        if !host.links["Menu"].exists && !host.buttons["Freeze"].exists {
+        if !host.links["Menu"].exists {
             nativeSummaryTap("Evidence export", in: host)
         }
         try nfNativeLink("Menu")

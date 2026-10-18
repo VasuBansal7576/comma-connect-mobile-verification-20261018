@@ -10,7 +10,7 @@ if os.environ.get('GITHUB_ACTIONS') != 'true':
 root = Path(__file__).resolve().parents[1]
 inputs = [
     ('ios/V15InstalledUITests.swift', 'd34a1b286cd1c87a92b6072bdc49035ab2ae19661f1a36466c47f68c6ec527bc'),
-    ('ios/V15NativeContinuation.swift.inc', '8d3156743e13fbf83f4fe1975be9c7498f8a4ea6ce52223f598e73b17d8b60bc'),
+    ('ios/V15NativeContinuation.swift.inc', 'ea70f9f3d4f139c5375c262ab785697735db7709f978a4bd45e613a78e27067a'),
     ('ios/V15URLContinuation.swift.inc', '9ac3abf9050a54ba03e57b1755dc420dbc23c26fa39905295ef50180fcb2758f'),
 ]
 parts = []
