@@ -49,9 +49,17 @@ import XCTest
         XCTAssertTrue(safari.staticTexts["CI-owned output calibration"].waitForExistence(timeout: 15))
         retain("safari-before-add-home", app: safari)
         tap("Share", in: safari)
-        let addHome = safari.buttons["Add to Home Screen"]
-        for _ in 0..<4 where !addHome.isHittable { safari.swipeUp() }
-        XCTAssertTrue(addHome.waitForExistence(timeout: 5) && addHome.isHittable, "Add to Home Screen not supported/visible")
+        // Retained iOS 18.6 AX identifies this action as a Cell in the
+        // share sheet collection, rather than a Button.
+        let actions = safari.collectionViews["activityCollectionView"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 5), "Safari share sheet not present")
+        let addHome = actions.cells["Add to Home Screen"]
+        for _ in 0..<4 {
+            if addHome.exists && addHome.isHittable { break }
+            actions.swipeUp()
+        }
+        retain("share-sheet-before-add-home", app: safari)
+        XCTAssertTrue(addHome.waitForExistence(timeout: 5) && addHome.isHittable, "Add to Home Screen cell not visible")
         addHome.tap()
         tap("Add", in: safari)
         let installed = launchInstalled()
