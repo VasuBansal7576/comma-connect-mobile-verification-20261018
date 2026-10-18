@@ -917,11 +917,11 @@ def observe_known_owned_page(version_lines,phase):
     save();return False
 
 def confirm_owned_install_and_observe(version_lines,option_action):
-    verified_current_install_option_action(version_lines,option_action);fresh,xml,png=retained_fresh_input('owned-v16-before-final-install')
+    verified_current_install_option_action(version_lines,option_action);native_package_presence('before-final-install');begin_native_install_diagnostic_window();fresh,xml,png=retained_fresh_input('owned-v16-before-final-install')
     target=final_install_target(xml,png,version_lines);verified_current_install_option_action(version_lines,option_action);age=input_age(fresh)
     STATE['ownedFinalInstallInput']={'inputSnapshotLabel':fresh['label'],'attempts':1,'target':target,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'snapshotAgeUpperBoundSeconds':age,'optionSnapshotLabel':option_action['inputSnapshotLabel'],'outcome':'DISPATCH_ONLY_NO_INSTALLED_VERDICT'};STATE['UIInputCommands']+=1;save()
     run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_owned_final_install',timeout=5)
-    STATE['ownedFinalInstallInput']['tapCommandCompleted']=True;save()
+    STATE['ownedFinalInstallInput']['tapCommandCompleted']=True;STATE['ownedFinalInstallInput']['completedInputOrdinal']=STATE['UIInputCommands'];save()
     start=time.monotonic();deadline=min(start+70,START+CAP);rows=[];STATE['ownedFinalInstallObservations']=rows
     for attempt in range(1,4):
         delay=start+(attempt-1)*20-time.monotonic()
@@ -941,9 +941,16 @@ def launch_observed_owned_pwa(version_lines):
     fresh,xml,png=retained_fresh_input('owned-v16-before-home-after-install');known_owned_chrome_without_dialog(xml,png,version_lines);age=input_age(fresh)
     STATE['ownedHomeAfterInstallInput']={'inputSnapshotLabel':fresh['label'],'snapshotAgeUpperBoundSeconds':age,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'keyCode':3};STATE['UIInputCommands']+=1;save()
     run([ADB,'-s',SERIAL,'shell','input','keyevent','3'],'home_after_owned_install',timeout=5)
-    fresh,xml,png=retained_fresh_input('owned-v16-before-installed-icon');target=owned_pwa_launcher_target(xml,png);age=input_age(fresh)
-    STATE['ownedPWAIconInput']={'inputSnapshotLabel':fresh['label'],'target':target,'snapshotAgeUpperBoundSeconds':age,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'manifestLabels':[OWNED_MANIFEST_NAME,OWNED_MANIFEST_SHORT_NAME]};STATE['UIInputCommands']+=1;save()
+    STATE['ownedHomeAfterInstallInput']['tapCommandCompleted']=True;STATE['ownedHomeAfterInstallInput']['completedInputOrdinal']=STATE['UIInputCommands'];save()
+    native_package_presence('after-home')
+    try:fresh,xml,png,target=find_observed_pwa_on_launcher()
+    except Refused:
+        native_package_presence('after-page-search');retain_post_install_error_categories();raise
+    age=input_age(fresh)
+    STATE['ownedPWAIconInput']={'inputSnapshotLabel':fresh['label'],'target':target,'snapshotAgeUpperBoundSeconds':age,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'manifestLabels':[OWNED_MANIFEST_NAME,OWNED_MANIFEST_SHORT_NAME],'inputOrdinalBefore':STATE['UIInputCommands'],'pageSearchCount':len(STATE.get('ownedPWAPageSearchInputs',[]))};STATE['UIInputCommands']+=1;save()
     run([ADB,'-s',SERIAL,'shell','input','tap',str(target['x']),str(target['y'])],'tap_observed_owned_pwa_icon',timeout=5)
+    STATE['ownedPWAIconInput']['tapCommandCompleted']=True;STATE['ownedPWAIconInput']['completedInputOrdinal']=STATE['UIInputCommands'];save()
+    native_package_presence('after-page-search')
     # No further native input; actual page/socket schema is observed below, never assumed.
     screen('owned-v16-after-installed-icon',observation_deadline=min(time.monotonic()+30,START+CAP))
     STATE['status']='STOP_OWNED_ICON_LAUNCHED_STANDALONE_NOT_YET_PROVED';save()
@@ -952,7 +959,7 @@ def launch_observed_owned_pwa(version_lines):
 def observe_installed_pwa_readonly():
     if OWNED_MANIFEST_NAME!='Connect V16 Audio Lab':
         STATE['readonlyInstalledObservation']={'status':'V15_REFERENCE_ONLY_USE_SEPARATE_V16_SUCCESSOR'};save();return
-    if STATE.get('UIInputCommands')!=9 or not STATE.get('ownedPWAIconInput'):raise Refused('CURRENT_NATIVE_OWNED_ICON_LAUNCH_REQUIRED')
+    verified_current_icon_launch()
     emulators=[r for r in STATE.get('children',[]) if r.get('kind')=='emulator' and r.get('startTicks') and process_ticks(r['pid'])==r['startTicks']]
     if len(emulators)!=1 or not STATE.get('ownedADBServerStarted'):raise Refused('CURRENT_OWNED_EMULATOR_ADB_BINDING_REQUIRED')
     if remaining(60)<60:
@@ -981,6 +988,164 @@ def observe_installed_pwa_readonly():
     STATE['status']='STOP_AFTER_ACTUAL_INSTALLED_READONLY_OBSERVATION_NO_AUDIO_VERDICT';save()
 
 
+def selected_phase_cap(argv):
+    final=[CHROME_TERMS_APPROVAL_FLAG,OWNED_LAB_CONTINUATION_FLAG,OWNED_MENU_OBSERVATION_FLAG,OWNED_ADD_HOME_FLAG,OWNED_INSTALL_OPTION_FLAG,OWNED_CONFIRM_INSTALL_FLAG]
+    if OWNED_CONFIRM_INSTALL_FLAG in argv and argv!=final:raise Refused('FINAL_MODE_EXACT_FLAG_SEQUENCE_REQUIRED')
+    return 480 if argv==final else 360
+
+def native_package_presence(phase):
+    if phase not in ['before-final-install','after-home','after-page-search']:raise Refused('EXACT_NATIVE_PACKAGE_DIAGNOSTIC_PHASE_REQUIRED')
+    row={'phase':phase,'atBootSeconds':time.monotonic()-START,'scope':'Native package presence only; no assumed manifest/app mapping or installed-PWA verdict.'};STATE.setdefault('nativePackagePresence',[]).append(row)
+    try:
+        raw,code,cut=run([ADB,'-s',SERIAL,'shell','pm','list','packages'],'native_packages_'+phase,timeout=3,limit=1024*1024,allowed_failure=True,retain_stdout=False)
+        if code or cut:row.update(status='NOT_ACQUIRED',exitCode=code,truncated=cut)
+        else:
+            lines=[line for line in raw.decode('ascii').splitlines() if line]
+            if not lines:raise ValueError('EMPTY_PACKAGE_LIST')
+            if any(not re.fullmatch(r'package:[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+',line) for line in lines):raise ValueError('PACKAGE_SCHEMA_UNKNOWN')
+            names=sorted(line.removeprefix('package:') for line in lines)
+            selected=[name for name in names if name=='com.android.chrome' or name.startswith('org.chromium.webapk.')]
+            if len(selected)>128:raise ValueError('PACKAGE_LIMIT')
+            row.update(status='OBSERVED',chromePresent='com.android.chrome'in selected,observedWebAPKPackages=[name for name in selected if name.startswith('org.chromium.webapk.')],packageListSHA256=hashlib.sha256(raw).hexdigest())
+    except (Refused,ValueError,UnicodeError):row['status']='NOT_ACQUIRED_BOUNDED_READONLY_DIAGNOSTIC'
+    save()
+
+def observed_launcher_foreground(xml):
+    if len(xml)>2*1024*1024 or b'<!DOCTYPE'in xml.upper()or b'<!ENTITY'in xml.upper():raise Refused('WORKSPACE_XML_INVALID')
+    tree=ET.fromstring(xml);package='com.google.android.apps.nexuslauncher'
+    if {e.get('package')for e in tree.iter()if e.get('package')}!={package}:raise Refused('SOLE_OBSERVED_NEXUS_FOREGROUND_REQUIRED')
+    forbidden={'parentPanel','alertTitle','permission_message','tab_modal_dialog_container','bottom_sheet'}
+    if any(e.get('resource-id','').rsplit('/',1)[-1]in forbidden for e in tree.iter()):raise Refused('UNKNOWN_NATIVE_MODAL_NO_LAUNCHER_INPUT')
+    return tree
+
+def launcher_workspace_context(xml,png):
+    if len(xml)>2*1024*1024 or b'<!DOCTYPE'in xml.upper()or b'<!ENTITY'in xml.upper():raise Refused('WORKSPACE_XML_INVALID')
+    tree=observed_launcher_foreground(xml);package='com.google.android.apps.nexuslauncher';prefix=package+':id/';parents={id(c):e for e in tree.iter() for c in e}
+    if len(png)<24 or png[:8]!=b'\x89PNG\r\n\x1a\n'or png[12:16]!=b'IHDR':raise Refused('WORKSPACE_SCREEN_REQUIRED')
+    width=int.from_bytes(png[16:20],'big');height=int.from_bytes(png[20:24],'big')
+    if not(0<width<=16384 and 0<height<=16384):raise Refused('WORKSPACE_SCREEN_REQUIRED')
+    def rect(e):
+        m=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',e.get('bounds',''))
+        if not m:raise Refused('WORKSPACE_BOUNDS_REQUIRED')
+        r=list(map(int,m.groups()));a,b,c,d=r
+        if not(0<=a<c<=width and 0<=b<d<=height):raise Refused('WORKSPACE_POSITIVE_BOUNDS_REQUIRED')
+        return r
+    def eligible(e):
+        a=e
+        while a is not None:
+            if a.get('enabled')=='false'or a.get('visible-to-user')=='false'or a.get('displayed')=='false':return False
+            a=parents.get(id(a))
+        return e.get('enabled')=='true'
+    nodes=[e for e in tree.iter() if e.get('resource-id')==prefix+'workspace']
+    if len(nodes)!=1:raise Refused('UNIQUE_OBSERVED_WORKSPACE_REQUIRED')
+    workspace=nodes[0];wr=rect(workspace)
+    if workspace.get('class')!='android.widget.ScrollView'or workspace.get('clickable')!='false'or not eligible(workspace):raise Refused('OBSERVED_WORKSPACE_CLASS_REQUIRED')
+    children=list(workspace)
+    if len(children)!=1 or children[0].get('class')!='android.view.ViewGroup'or children[0].get('package')!=package or children[0].get('clickable')!='false'or not eligible(children[0]):raise Refused('OBSERVED_WORKSPACE_CHILD_REQUIRED')
+    child=children[0];cr=rect(child)
+    if not(wr[0]<=cr[0]<cr[2]<=wr[2]and wr[1]<=cr[1]<cr[3]<=wr[3]):raise Refused('WORKSPACE_VIEWPORT_NESTING_REQUIRED')
+    signature=hashlib.sha256(json.dumps([{k:e.get(k,'') for k in ['class','resource-id','text','content-desc','bounds','clickable','enabled','scrollable','visible-to-user','displayed']}for e in child.iter()],sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    ignored=set();a=child
+    while a is not None:ignored.add(id(a));a=parents.get(id(a))
+    blockers=[]
+    for e in tree.iter():
+        if id(e)in ignored or not eligible(e)or e.get('clickable')!='true'and e.get('long-clickable')!='true':continue
+        if e.get('bounds')=='[0,0][0,0]':continue  # Offscreen nodes cannot receive this on-screen path.
+        blockers.append(rect(e))
+    names={OWNED_MANIFEST_NAME,OWNED_MANIFEST_SHORT_NAME};count=sum(e.get('package')==package and e.get('text')in names and e.get('content-desc')in names for e in tree.iter())
+    return {'workspaceBounds':wr,'viewportBounds':cr,'screen':[width,height],'scrollable':workspace.get('scrollable')=='true','signature':signature,'blockerRects':blockers,'matchingManifestIconNodes':count}
+
+def launcher_left_swipe_target(xml,png):
+    context=launcher_workspace_context(xml,png);a,b,c,d=context['viewportBounds']
+    if not context['scrollable']or c-a<200 or d-b<200:raise Refused('FRESH_SCROLLABLE_WORKSPACE_REQUIRED')
+    left=a+(c-a)//5;right=c-(c-a)//5
+    for numerator,denominator in [(1,2),(3,5),(2,5)]:
+        y=b+(d-b)*numerator//denominator
+        if not any(x0<=right and x1>=left and y0<=y<y1 for x0,y0,x1,y1 in context['blockerRects']):
+            return {'from':[right,y],'to':[left,y],'durationMs':300,'workspaceBounds':context['workspaceBounds'],'viewportBounds':context['viewportBounds'],'screen':context['screen'],'signature':context['signature'],'scope':'Observed empty horizontal workspace band; no assumed page number or icon position.'}
+    raise Refused('NO_CLEAR_NATIVE_WORKSPACE_GESTURE_BAND')
+
+def find_observed_pwa_on_launcher():
+    if STATE.get('UIInputCommands')!=8 or not STATE.get('ownedHomeAfterInstallInput',{}).get('tapCommandCompleted'):raise Refused('CURRENT_COMPLETED_OWN_HOME_REQUIRED')
+    rows=[];STATE['ownedPWAPageSearchInputs']=rows;previous=None
+    for page in range(3):
+        label='owned-v16-before-installed-icon'+('-page-'+str(page)if page else '')
+        fresh,xml,png=retained_fresh_input(label)
+        for settled_read in range(2):
+            observed_launcher_foreground(xml)
+            try:target=owned_pwa_launcher_target(xml,png);return fresh,xml,png,target
+            except Refused as error:
+                if str(error)!='UNIQUE_OBSERVED_OWNED_PWA_ICON_REQUIRED':raise
+            context=launcher_workspace_context(xml,png)
+            if context['matchingManifestIconNodes']:raise Refused('AMBIGUOUS_OWN_PWA_ICON_NO_PAGE_GESTURE')
+            if previous is None or context['signature']!=previous:break
+            if settled_read:raise Refused('WORKSPACE_UNCHANGED_AFTER_ONE_GESTURE_NO_REPEAT')
+            fresh,xml,png=retained_fresh_input(label+'-settled')  # One extra readonly transition observation.
+        if page==2:raise Refused('OWN_PWA_ICON_ABSENT_AFTER_TWO_BOUNDED_PAGE_GESTURES')
+        target=launcher_left_swipe_target(xml,png);age=input_age(fresh)
+        row={'inputSnapshotLabel':fresh['label'],'target':target,'xmlSHA256':hashlib.sha256(xml).hexdigest(),'pngSHA256':hashlib.sha256(png).hexdigest(),'snapshotAgeUpperBoundSeconds':age,'attempts':1,'inputOrdinal':STATE['UIInputCommands']+1,'tapCommandCompleted':False};rows.append(row);STATE['UIInputCommands']+=1;save()
+        run([ADB,'-s',SERIAL,'shell','input','swipe',*[str(v)for v in target['from']+target['to']],str(target['durationMs'])],'owned_workspace_left_'+str(page+1),timeout=5)
+        row['tapCommandCompleted']=True;row['completionBootSeconds']=time.monotonic()-START;save();previous=target['signature']
+    raise Refused('BOUNDED_OWN_PWA_ICON_SEARCH_EXHAUSTED')
+
+def verified_current_icon_launch():
+    icon=STATE.get('ownedPWAIconInput',{});home=STATE.get('ownedHomeAfterInstallInput',{});rows=STATE.get('ownedPWAPageSearchInputs',[])
+    if not isinstance(rows,list)or len(rows)>2 or home.get('tapCommandCompleted')is not True or home.get('completedInputOrdinal')!=8:raise Refused('CURRENT_OWN_HOME_AND_BOUNDED_SEARCH_REQUIRED')
+    final=STATE.get('ownedFinalInstallInput',{});version=STATE.get('androidChromeVersionLines',[])
+    if final.get('tapCommandCompleted')is not True or final.get('completedInputOrdinal')!=7 or home.get('keyCode')!=3:raise Refused('CURRENT_FINAL_INSTALL_AND_HOME_PROVENANCE_REQUIRED')
+    for proof,pattern,validator in [(final,r'owned-v16-before-final-install-input-attempt-[1-3]',lambda x,p:final_install_target(x,p,version)),(home,r'owned-v16-before-home-after-install-input-attempt-[1-3]',lambda x,p:known_owned_chrome_without_dialog(x,p,version))]:
+        label=proof.get('inputSnapshotLabel','')
+        if not re.fullmatch(pattern,label):raise Refused('OWNED_INSTALL_HOME_CONTEXT_LABEL_REQUIRED')
+        xml=(OUT/(label+'.xml')).read_bytes();png=(OUT/(label+'.png')).read_bytes()
+        if hashlib.sha256(xml).hexdigest()!=proof.get('xmlSHA256')or hashlib.sha256(png).hexdigest()!=proof.get('pngSHA256'):raise Refused('OWNED_INSTALL_HOME_CONTEXT_PIN_MISMATCH')
+        observed=validator(xml,png)
+        if proof is final and observed!=proof.get('target'):raise Refused('OWNED_FINAL_INSTALL_CONTEXT_TARGET_MISMATCH')
+    expected=9+len(rows)
+    if STATE.get('UIInputCommands')!=expected or icon.get('tapCommandCompleted')is not True or icon.get('completedInputOrdinal')!=expected or icon.get('inputOrdinalBefore')!=expected-1 or icon.get('pageSearchCount')!=len(rows):raise Refused('CURRENT_NATIVE_OWNED_ICON_LAUNCH_REQUIRED')
+    for index,row in enumerate(rows):
+        if row.get('inputOrdinal')!=9+index or row.get('attempts')!=1 or row.get('tapCommandCompleted')is not True:raise Refused('CURRENT_WORKSPACE_INPUT_CHAIN_REQUIRED')
+        label=row.get('inputSnapshotLabel','')
+        if not re.fullmatch(r'owned-v16-before-installed-icon(?:-page-[1-2])?(?:-settled)?-input-attempt-[1-3]',label):raise Refused('OWNED_WORKSPACE_CONTEXT_LABEL_REQUIRED')
+        xml=(OUT/(label+'.xml')).read_bytes();png=(OUT/(label+'.png')).read_bytes()
+        if hashlib.sha256(xml).hexdigest()!=row.get('xmlSHA256')or hashlib.sha256(png).hexdigest()!=row.get('pngSHA256')or launcher_left_swipe_target(xml,png)!=row.get('target'):raise Refused('OWNED_WORKSPACE_CONTEXT_PIN_MISMATCH')
+    label=icon.get('inputSnapshotLabel','')
+    if not re.fullmatch(r'owned-v16-before-installed-icon(?:-page-[1-2])?(?:-settled)?-input-attempt-[1-3]',label):raise Refused('OWNED_ICON_CONTEXT_LABEL_REQUIRED')
+    xml=(OUT/(label+'.xml')).read_bytes();png=(OUT/(label+'.png')).read_bytes()
+    observed_launcher_foreground(xml)
+    if hashlib.sha256(xml).hexdigest()!=icon.get('xmlSHA256')or hashlib.sha256(png).hexdigest()!=icon.get('pngSHA256')or owned_pwa_launcher_target(xml,png)!=icon.get('target'):raise Refused('OWNED_ICON_CONTEXT_PIN_MISMATCH')
+
+
+def begin_native_install_diagnostic_window():
+    try:
+        raw,code,cut=run([ADB,'-s',SERIAL,'shell','date','+%s'],'native_install_epoch_anchor',timeout=3,limit=128,allowed_failure=True,retain_stdout=False)
+        if code or cut or not re.fullmatch(rb'[1-9]\d{8,12}\s*',raw):raise ValueError('EPOCH_NOT_ACQUIRED')
+        STATE['nativeInstallDiagnosticWindow']={'deviceEpochSecondsBeforeFinalInputSnapshot':int(raw),'scope':'Read before final fresh snapshot, not an exact tap timestamp; no device clock changes.'}
+    except (Refused,ValueError):STATE['nativeInstallDiagnosticWindow']={'status':'NO_NATIVE_TIME_ANCHOR'}
+    save()
+
+def webapk_install_error_categories(text,start_epoch):
+    parsed=[]
+    for line in text.splitlines():
+        m=re.match(r'^\s*(\d{9,13}(?:\.\d+)?)\s',line)
+        if m and float(m.group(1))>=start_epoch:parsed.append(line)
+    related=[line for line in parsed if re.search(r'webapk|web.?app.*(?:install|packag)',line,re.I)]
+    return {'parsedLinesSinceAnchor':len(parsed),'webAPKRelatedLines':len(related),'webAPKInstallOrDownloadError':sum(bool(re.search(r'(?:install|update|download|fetch|request).{0,120}(?:fail|error|reject|timeout)|(?:fail|error|reject|timeout).{0,120}(?:install|download|fetch)',line,re.I))for line in related),'webAPKNetworkError':sum(bool(re.search(r'net::ERR_|HTTP.{0,20}[45]\d\d|network.{0,80}(?:fail|error)|connection.{0,80}(?:fail|refused|timeout)',line,re.I))for line in related),'packageManagerFailureNotNecessarilyThisApp':sum(bool(re.search(r'INSTALL_(?:FAILED|PARSE_FAILED)_[A-Z_]+',line))for line in parsed)}
+
+def retain_post_install_error_categories():
+    row={'atBootSeconds':time.monotonic()-START,'rawLogcatRetained':False,'tailAtMostLines':300,'scope':'Post-own-Install bounded native log tail, filtered after pre-input device-time anchor; categories are not causal verdicts or proof installation failed.'};STATE['postInstallNativeErrorCategories']=row
+    anchor=STATE.get('nativeInstallDiagnosticWindow',{}).get('deviceEpochSecondsBeforeFinalInputSnapshot')
+    if type(anchor)is not int:row['status']='NOT_ACQUIRED_NO_NATIVE_TIME_ANCHOR';save();return
+    try:
+        raw,code,cut=run([ADB,'-s',SERIAL,'logcat','-d','-t','300','-v','epoch'],'post_install_native_categories',timeout=3,limit=65536,allowed_failure=True,retain_stdout=False)
+        row.update(exitCode=code,tailByteLimited=cut)
+        if code:row['status']='NOT_ACQUIRED'
+        else:
+            categories=webapk_install_error_categories(raw.decode(errors='replace'),anchor)
+            row.update(status='BOUNDED_POST_INSTALL_CATEGORIES_OBSERVED' if categories['parsedLinesSinceAnchor'] else 'NO_PARSEABLE_POST_INPUT_ROWS_IN_BOUNDED_TAIL',deviceEpochStart=anchor,categories=categories,rawTailBytes=len(raw),rawTailSHA256=hashlib.sha256(raw).hexdigest())
+    except Refused:row['status']='NOT_ACQUIRED_BOUNDED_READONLY_FAILURE'
+    save()
+
+
 def listener_guard():
     data,_,_=run(['ss','-ltn'],'selected_listeners')
     selected=[]
@@ -1006,15 +1171,16 @@ def firstscreen_can_launch_chrome(packages):
     return bool(packages.intersection(launcher)) and packages.issubset(launcher|{'com.android.systemui','android'})
 
 def main():
+    global STATE,TRACE,CAP
     OUT.mkdir(parents=True,exist_ok=True)
     if '--cleanup' in sys.argv:
-        global STATE,TRACE
         if (OUT/'receipt.json').exists():
             STATE=json.loads((OUT/'receipt.json').read_text());TRACE=STATE.get('trace',[]);cleanup()
         return 0
     for sig in [signal.SIGTERM,signal.SIGINT]:signal.signal(sig,lambda *_:(_ for _ in ()).throw(Refused('OWN_PROCESS_INTERRUPTED')))
     save()
     try:
+        CAP=selected_phase_cap(sys.argv[1:]);STATE['phaseCapSeconds']=CAP;STATE['phaseCapScope']='EXPLICIT_FINAL_INSTALL_480' if CAP==480 else 'DEFAULT_OBSERVATION_360';save()
         installed=json.loads(Path('evidence/android-stable-setup/post-install.json').read_text())
         if installed.get('status')!='PASS_INSTALLED_EXACT_STABLE_BINDINGS':raise Refused('INSTALLED_STABLE_BINDING_REQUIRED')
         if os.uname().sysname!='Linux' or os.uname().machine!='x86_64':raise Refused('HOST_SCOPE')
