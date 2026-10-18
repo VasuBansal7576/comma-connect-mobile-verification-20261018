@@ -385,8 +385,22 @@ extension V16InstalledUITests {
         XCTAssertGreaterThanOrEqual(try nfNumber(good["readyState"]), 2); XCTAssertTrue(good["error"] is NSNull)
         XCTAssertEqual(drive["isBufferingVideo"] as? Bool, false); XCTAssertTrue(drive["videoError"] is NSNull)
         XCTAssertGreaterThan(try nfNumber(drive["desiredPlaySpeed"]), 0)
-        try nfVerifyEOFEvents(finalReport, final: final)
+        // Source acquisition is not an EOF/frame pass. The workflow's mandatory
+        // offline assessor verifies the original carrier and actual post-seeked frames.
         try nfPackGlobal("wide-natural-EOF-complete")
+        let pending: [String: Any] = [
+            "schema": "v16-ios-eof-acquisition-pending-v1",
+            "status": "PENDING_MANDATORY_OFFLINE_EOF_FRAME_ASSESSMENT",
+            "documentInstance": try XCTUnwrap(final["documentInstance"] as? String),
+            "timeOrigin": try nfNumber(final["timeOrigin"]),
+            "nativeOwner": try nfNumber(good["owner"]),
+            "loadId": try nfNumber(drive["loadId"]),
+            "trustedEndedCount": ended.count,
+            "config": try nfObject(final["config"]),
+            "scope": "Actual native acquisition only; workflow success additionally requires complete original-carrier EOF event and frame acceptance."
+        ]
+        attachment("v16-nf-EOF-offline-acceptance-pending", String(decoding:
+            try JSONSerialization.data(withJSONObject: pending, options: [.sortedKeys]), as: UTF8.self))
         // Offline pairs each EOF with owned1.001 command/real seeking, seeked/playing chronology, current frame/adapter
         // owners and unchanged document/load. Transport is classified from actual source/engine.
         // This is settled EOF coverage, NOT an exact in-flight loop-seek/Pause race hit.

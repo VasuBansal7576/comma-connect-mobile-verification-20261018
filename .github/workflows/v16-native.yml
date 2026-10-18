@@ -137,6 +137,10 @@ jobs:
         if: always()
         timeout-minutes: 4
         run: python3 scripts/export_xcresult_attachments_v16.py
+      - name: Mandatory original-carrier EOF event and frame acceptance
+        if: always() && steps.install.outcome == 'success'
+        timeout-minutes: 2
+        run: python3 scripts/ios_eof_v16/assess_ci_eof.py
       - name: Retain stable native evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
